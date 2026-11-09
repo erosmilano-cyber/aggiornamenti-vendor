@@ -2,7 +2,7 @@
 /**
  * Plugin Name:       Aggiornamenti Vendor
  * Description:       Aggrega lato server advisory e aggiornamenti dei vendor (feed RSS, CSAF, errata AlmaLinux, CISA KEV) e li mostra con lo shortcode [aggiornamenti_vendor].
- * Version:           2.1.0
+ * Version:           2.1.1
  * Requires at least: 6.0
  * Requires PHP:      7.4
  * Update URI:        https://github.com/erosmilano-cyber/aggiornamenti-vendor
@@ -506,6 +506,7 @@ TXT;
 				.agv-filters button[aria-pressed="true"]{background:var(--agv-a);border-color:var(--agv-a);color:#fff}
 				.agv-list{list-style:none;margin:0;padding:0}
 				.agv-list li{display:grid;grid-template-columns:7.5rem 10rem 1fr;gap:.75rem;padding:.55rem 0;border-bottom:1px solid var(--agv-b);align-items:baseline}
+				.agv-list li[hidden]{display:none}
 				.agv-date{color:var(--agv-m);font-variant-numeric:tabular-nums;font-size:.85rem}
 				.agv-vendor{font-size:.8rem;font-weight:600;border:1px solid var(--agv-b);border-radius:4px;padding:.05rem .4rem;justify-self:start}
 				.agv-list a{word-break:break-word}
