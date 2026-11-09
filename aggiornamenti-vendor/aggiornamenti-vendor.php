@@ -2,7 +2,7 @@
 /**
  * Plugin Name:       Aggiornamenti Vendor
  * Description:       Aggrega lato server advisory e aggiornamenti dei vendor (feed RSS, CSAF, errata AlmaLinux, CISA KEV) e li mostra con lo shortcode [aggiornamenti_vendor].
- * Version:           2.2.0
+ * Version:           2.3.0
  * Requires at least: 6.0
  * Requires PHP:      7.4
  * Update URI:        https://github.com/erosmilano-cyber/aggiornamenti-vendor
@@ -30,17 +30,17 @@ final class Aggiornamenti_Vendor {
 	 * Fonti predefinite.
 	 * Formato riga: Etichetta | URL dati | Pagina pubblica | tipo | modo | nota
 	 *   tipo: rss (predefinito) | csaf | almalinux | kev
-	 *   modo: titolo (mostra il titolo del vendor) | id (mostra solo gli identificativi dell'advisory)
+	 *   modo: completo (titolo + breve descrizione del vendor) | titolo (solo titolo) | id (solo identificativi dell'advisory)
 	 *   nota: attribuzione mostrata nell'elenco fonti
 	 */
 	public static function default_sources() {
 		return <<<'TXT'
-## FONTI CON LICENZA APERTA O PERMESSO ESPLICITO (attive, modo titolo)
-Red Hat | https://security.access.redhat.com/data/meta/v1/rhsa.rss | https://access.redhat.com/security/security-updates/ | rss | titolo | Dati © Red Hat, Inc., licenza CC BY 4.0 (creativecommons.org/licenses/by/4.0)
+## FONTI CON LICENZA APERTA O PERMESSO ESPLICITO (attive, modo completo o titolo: vedi docs/FONTI.md)
+Red Hat | https://security.access.redhat.com/data/meta/v1/rhsa.rss | https://access.redhat.com/security/security-updates/ | rss | completo | Dati © Red Hat, Inc., licenza CC BY 4.0 (creativecommons.org/licenses/by/4.0)
 Debian | https://www.debian.org/security/dsa.rdf | https://www.debian.org/security/ | rss | titolo | Contenuti debian.org, licenza MIT (Expat) / GPL
 Sophos | https://www.sophos.com/security-advisories/feed | https://www.sophos.com/en-us/security-advisories | rss | titolo | Contenuti del feed © Sophos Ltd. Sito non affiliato né approvato da Sophos.
-CSIRT Italia | https://www.acn.gov.it/portale/feedrss/-/journal/rss/20119/723192 | https://www.acn.gov.it/portale/csirt-italia/alert-e-bollettini | rss | titolo | Fonte: ACN – CSIRT Italia (dati aperti, art. 52 c. 2 CAD)
-CISA KEV | https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json | https://www.cisa.gov/known-exploited-vulnerabilities-catalog | kev | titolo | Fonte: CISA Known Exploited Vulnerabilities Catalog
+CSIRT Italia | https://www.acn.gov.it/portale/feedrss/-/journal/rss/20119/723192 | https://www.acn.gov.it/portale/csirt-italia/alert-e-bollettini | rss | completo | Fonte: ACN – CSIRT Italia (dati aperti, art. 52 c. 2 CAD)
+CISA KEV | https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json | https://www.cisa.gov/known-exploited-vulnerabilities-catalog | kev | completo | Fonte: CISA Known Exploited Vulnerabilities Catalog
 
 ## FONTI SENZA TERMINI SPECIFICI SUL RIUSO (attive, modo id: nessun testo del vendor, solo identificativo + link)
 Cisco | https://sec.cloudapps.cisco.com/security/center/psirtrss20/CiscoSecurityAdvisory.xml | https://sec.cloudapps.cisco.com/security/center/publicationListing.x | rss | id |
@@ -158,7 +158,7 @@ TXT;
 				'feed'  => $feed,
 				'home'  => isset( $p[2] ) ? esc_url_raw( $p[2], array( 'https', 'http' ) ) : '',
 				'type'  => in_array( $type, array( 'rss', 'csaf', 'almalinux', 'kev' ), true ) ? $type : 'rss',
-				'mode'  => 'id' === $mode ? 'id' : 'titolo',
+				'mode'  => in_array( $mode, array( 'id', 'completo' ), true ) ? $mode : 'titolo',
 				'note'  => isset( $p[5] ) ? sanitize_text_field( $p[5] ) : '',
 			);
 		}
@@ -199,6 +199,7 @@ TXT;
 		foreach ( $feed->get_items( 0, $max * 4 ) as $it ) {
 			$items[] = array(
 				'title' => self::clean( $it->get_title() ),
+				'desc'  => self::clean( $it->get_description(), 600 ),
 				'link'  => (string) $it->get_permalink(),
 				'ts'    => (int) $it->get_date( 'U' ),
 			);
@@ -273,6 +274,7 @@ TXT;
 			}
 			$items[] = array(
 				'title' => self::clean( sprintf( '%s %s – %s (%s)', $v['vendorProject'] ?? '', $v['product'] ?? '', $v['vulnerabilityName'] ?? '', $v['cveID'] ) ),
+				'desc'  => self::clean( $v['shortDescription'] ?? '', 600 ),
 				'link'  => 'https://nvd.nist.gov/vuln/detail/' . $v['cveID'],
 				'ts'    => (int) strtotime( ( $v['dateAdded'] ?? '' ) . ' 00:00:00 UTC' ),
 			);
@@ -437,6 +439,8 @@ TXT;
 					$entry['items'][] = array(
 						'title' => $it['title'],
 						'ids'   => self::extract_ids( $it['title'], $link ),
+						// La descrizione si conserva solo per le fonti in modo "completo" (licenza verificata).
+						'desc'  => 'completo' === $src['mode'] ? self::excerpt( $it['desc'] ?? '', $it['title'] ) : '',
 						'link'  => $link,
 						'ts'    => (int) $it['ts'],
 					);
@@ -452,6 +456,34 @@ TXT;
 
 		update_option( self::OPT_DATA, array( 'updated' => time(), 'sources' => $sources ), false );
 		delete_transient( self::LOCK );
+	}
+
+	/**
+	 * Breve descrizione: niente se è solo un link o ripete il titolo; altrimenti
+	 * taglio a fine parola entro $len caratteri.
+	 */
+	public static function excerpt( $desc, $title, $len = 220 ) {
+		$desc = trim( (string) $desc );
+		if ( '' === $desc || preg_match( '#^https?://\S+$#i', $desc ) ) {
+			return '';
+		}
+		$norm = function ( $s ) {
+			return strtolower( preg_replace( '/\W+/u', '', $s ) );
+		};
+		if ( '' === $norm( $desc ) || false !== strpos( $norm( $title ), $norm( $desc ) ) ) {
+			return '';
+		}
+		$strlen = function_exists( 'mb_strlen' ) ? 'mb_strlen' : 'strlen';
+		$substr = function_exists( 'mb_substr' ) ? 'mb_substr' : 'substr';
+		if ( $strlen( $desc ) <= $len ) {
+			return $desc;
+		}
+		$cut = $substr( $desc, 0, $len );
+		$sp  = strrpos( $cut, ' ' );
+		if ( false !== $sp && $sp > $len * 0.6 ) {
+			$cut = substr( $cut, 0, $sp );
+		}
+		return rtrim( $cut, " \t,;:.–-" ) . '…';
 	}
 
 	/* ----------------------------------------------------------- Frontend */
@@ -485,6 +517,7 @@ TXT;
 				$items[] = array(
 					'vendor' => $src['label'],
 					'text'   => self::display_text( $src, $it ),
+					'desc'   => 'completo' === $src['mode'] ? (string) ( $it['desc'] ?? '' ) : '',
 					'link'   => $it['link'],
 					'ts'     => $it['ts'],
 				);
@@ -563,6 +596,7 @@ TXT;
 				.agv-new{padding:.05rem .45rem;border-radius:999px;background:#dc2626;color:#fff;font-size:.66rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase}
 				.agv-title{display:block;font-weight:600;line-height:1.4;overflow-wrap:anywhere}
 				.agv-card:hover .agv-title{text-decoration:underline;text-underline-offset:.15em}
+				.agv-desc{display:block;margin:.3rem 0 0;font-size:.86rem;line-height:1.5;color:var(--agv-muted);overflow-wrap:anywhere}
 				.agv-arrow{position:absolute;top:50%;right:1rem;transform:translateY(-50%);opacity:.35;transition:opacity .15s,transform .15s}
 				.agv-card:hover .agv-arrow{opacity:.9;transform:translate(2px,-50%)}
 				.agv-sr{position:absolute;width:1px;height:1px;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
@@ -609,6 +643,9 @@ TXT;
 												<?php endif; ?>
 											</span>
 											<span class="agv-title"><?php echo esc_html( $it['text'] ); ?></span>
+											<?php if ( '' !== $it['desc'] ) : ?>
+												<span class="agv-desc"><?php echo esc_html( $it['desc'] ); ?></span>
+											<?php endif; ?>
 											<span class="agv-arrow" aria-hidden="true">↗</span>
 											<span class="agv-sr">(si apre in una nuova scheda)</span>
 										</a>
@@ -897,8 +934,8 @@ TXT;
 							<p class="description">
 								Una fonte per riga: <code>Etichetta | URL dati (https) | Pagina pubblica | tipo | modo | nota</code>.<br>
 								<strong>tipo</strong>: <code>rss</code>, <code>csaf</code> (URL della directory con changes.csv), <code>almalinux</code> (errata.full.json), <code>kev</code> (catalogo CISA).<br>
-								<strong>modo</strong>: <code>titolo</code> mostra il titolo pubblicato dal vendor; <code>id</code> mostra solo identificativi (CVE, ID advisory) e link, senza testo del vendor.<br>
-								Le righe che iniziano con <code>#</code> sono ignorate. Prima di attivare una fonte o passare a <code>titolo</code>, verifica i termini d'uso del vendor.
+								<strong>modo</strong>: <code>completo</code> mostra titolo e breve descrizione del vendor; <code>titolo</code> solo il titolo; <code>id</code> solo identificativi (CVE, ID advisory) e link, senza testo del vendor.<br>
+								Le righe che iniziano con <code>#</code> sono ignorate. Prima di attivare una fonte o passare a <code>titolo</code> o <code>completo</code>, verifica i termini d'uso del vendor.
 							</p>
 						</td>
 					</tr>
