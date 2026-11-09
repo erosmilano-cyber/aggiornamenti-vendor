@@ -2,7 +2,7 @@
 /**
  * Plugin Name:       Aggiornamenti Vendor
  * Description:       Aggrega lato server advisory e aggiornamenti dei vendor (feed RSS, CSAF, errata AlmaLinux, CISA KEV) e li mostra con lo shortcode [aggiornamenti_vendor].
- * Version:           2.7.0
+ * Version:           2.7.1
  * Requires at least: 6.0
  * Requires PHP:      7.4
  * Update URI:        https://github.com/erosmilano-cyber/aggiornamenti-vendor
@@ -1171,10 +1171,11 @@ TXT;
 		?>
 		<div class="wrap agv-admin">
 			<style>
-				.agv-admin{--agv-accent:var(--wp-admin-theme-color,#2271b1);max-width:1100px}
+				.agv-admin{--agv-accent:var(--wp-admin-theme-color,#2271b1)}
 				.agv-admin h1{display:flex;align-items:center;gap:.6rem;flex-wrap:wrap}
 				.agv-admin .agv-ver{font-size:12px;font-weight:500;padding:.15rem .55rem;border-radius:999px;background:#f0f0f1;color:#50575e}
-				.agv-admin .nav-tab-wrapper{margin:1rem 0 1.25rem}
+				.agv-admin .nav-tab-wrapper{display:grid;grid-template-columns:repeat(4,1fr);gap:.5rem;margin:1rem 0 1.25rem;padding:0}
+				.agv-admin .nav-tab-wrapper .nav-tab{float:none;margin:0 0 -1px;display:flex;align-items:center;justify-content:center;padding:.65rem .5rem;font-size:15px}
 				.agv-admin .nav-tab .agv-n{display:inline-block;min-width:1.4em;margin-left:.35rem;padding:0 .4em;border-radius:999px;background:#dcdcde;font-size:11px;line-height:1.6;text-align:center}
 				.agv-admin .nav-tab .agv-n.agv-bad{background:#d63638;color:#fff}
 				.agv-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:1rem;margin-bottom:1.5rem}
@@ -1195,9 +1196,21 @@ TXT;
 				.agv-panel{background:#fff;border:1px solid #dcdcde;border-radius:8px;padding:1.25rem;box-shadow:0 1px 2px rgba(0,0,0,.04)}
 				.agv-panel > h2:first-child{margin-top:0}
 				.agv-panel textarea.code{white-space:pre;overflow-x:auto;font-size:13px;line-height:1.5}
-				.agv-panel details{margin:.75rem 0;color:#50575e}
-				.agv-panel summary{cursor:pointer;color:var(--agv-accent);font-weight:500}
-				.agv-panel .form-table th{width:220px}
+				.agv-split{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:1.5rem;align-items:start}
+				.agv-main h2{margin-top:0}
+				.agv-help{background:#f6f7f7;border:1px solid #e0e0e0;border-radius:8px;padding:1rem 1.15rem;color:#3c434a;position:sticky;top:48px}
+				.agv-help h3{margin:1rem 0 .4rem;font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:#50575e}
+				.agv-help h3:first-child{margin-top:0}
+				.agv-help ul{margin:0;padding:0;list-style:none}
+				.agv-help li{margin:.3rem 0}
+				.agv-help p{margin:.4rem 0}
+				.agv-help .agv-warn{margin-top:1rem;padding:.6rem .75rem;border-left:3px solid #dba617;background:#fcf9e8}
+				.agv-fields{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:1rem}
+				.agv-field{border:1px solid #e0e0e0;border-radius:8px;padding:1rem 1.15rem;display:flex;flex-direction:column;gap:.45rem;background:#fcfcfc}
+				.agv-field label{font-weight:600}
+				.agv-field input[type=number]{width:7rem}
+				.agv-field .description{margin:0}
+				.agv-field.agv-wide{grid-column:1/-1}
 				.agv-bar{display:flex;flex-wrap:wrap;align-items:center;gap:.5rem;margin-top:1rem}
 				.agv-bar .agv-sp{flex:1}
 				.agv-tw{overflow-x:auto}
@@ -1206,7 +1219,8 @@ TXT;
 				.agv-src .agv-feed{display:block;font-size:11px;color:#646970;word-break:break-all;margin-top:.15rem}
 				.agv-src .agv-err{display:block;font-size:12px;color:#a1191f;margin-top:.25rem}
 				.agv-src .num{text-align:right;font-variant-numeric:tabular-nums}
-				@media (max-width:782px){.agv-src .agv-hide,.agv-src .agv-feed{display:none}.agv-panel .form-table th{width:auto}}
+				@media (max-width:1100px){.agv-split{grid-template-columns:1fr}.agv-help{position:static}}
+				@media (max-width:782px){.agv-src .agv-hide,.agv-src .agv-feed{display:none}.agv-fields{grid-template-columns:1fr}.agv-admin .nav-tab-wrapper{grid-template-columns:repeat(2,1fr)}.agv-admin .nav-tab-wrapper .nav-tab{margin:0;border-bottom:1px solid #c3c4c7}.agv-admin .nav-tab-wrapper .nav-tab-active{background:#fff;border-color:var(--agv-accent);box-shadow:inset 0 -3px 0 var(--agv-accent)}}
 			</style>
 
 			<h1>Aggiornamenti Vendor <?php $u = self::update_status(); ?><span class="agv-ver">versione <?php echo esc_html( $u['installed'] ); ?></span></h1>
@@ -1376,46 +1390,79 @@ TXT;
 						<?php settings_fields( 'agv' ); ?>
 
 						<?php if ( 'fonti' === $tab ) : ?>
-							<h2><label for="agv-sources">Fonti</label></h2>
-							<p>Una fonte per riga: <code>Etichetta | URL dati (https) | Pagina pubblica | tipo | modo | nota</code>. Le righe che iniziano con <code>#</code> sono disattivate.</p>
-							<details>
-								<summary>Tipi e modi di visualizzazione</summary>
-								<p><strong>tipo</strong>: <code>rss</code>, <code>csaf</code> (URL della directory con changes.csv), <code>almalinux</code> (errata.full.json), <code>kev</code> (catalogo CISA).<br>
-								<strong>modo</strong>: <code>completo</code> mostra titolo e breve descrizione del vendor; <code>titolo</code> solo il titolo; <code>id</code> solo identificativi (CVE, ID advisory) e link, senza testo del vendor.<br>
-								Prima di attivare una fonte o passare a <code>titolo</code> o <code>completo</code>, verifica i termini d'uso del vendor.</p>
-							</details>
-							<textarea id="agv-sources" name="<?php echo $opt; // phpcs:ignore WordPress.Security.EscapeOutput ?>[sources]" rows="22" class="large-text code" spellcheck="false"><?php echo esc_textarea( $s['sources'] ); ?></textarea>
+							<div class="agv-split">
+								<div class="agv-main">
+									<h2><label for="agv-sources">Fonti</label></h2>
+									<p>Una fonte per riga. Le righe che iniziano con <code>#</code> sono disattivate.</p>
+									<textarea id="agv-sources" name="<?php echo $opt; // phpcs:ignore WordPress.Security.EscapeOutput ?>[sources]" rows="26" class="large-text code" spellcheck="false"><?php echo esc_textarea( $s['sources'] ); ?></textarea>
+								</div>
+								<aside class="agv-help" aria-label="Guida al formato delle fonti">
+									<h3>Formato della riga</h3>
+									<p><code>Etichetta | URL dati | Pagina pubblica | tipo | modo | nota</code></p>
+									<h3>Tipo</h3>
+									<ul>
+										<li><code>rss</code> feed RSS o Atom</li>
+										<li><code>csaf</code> directory CSAF 2.0 con changes.csv</li>
+										<li><code>almalinux</code> errata.full.json</li>
+										<li><code>kev</code> catalogo CISA KEV</li>
+									</ul>
+									<h3>Modo</h3>
+									<ul>
+										<li><code>completo</code> titolo e breve descrizione del vendor</li>
+										<li><code>titolo</code> solo il titolo</li>
+										<li><code>id</code> solo identificativi (CVE, ID advisory) e link</li>
+									</ul>
+									<p class="agv-warn">Prima di attivare una fonte o passare a <code>titolo</code> o <code>completo</code>, verifica i termini d'uso del vendor.</p>
+								</aside>
+							</div>
 
 						<?php elseif ( 'argomenti' === $tab ) : ?>
-							<h2><label for="agv-topics">Filtri per argomento</label></h2>
-							<p>Una riga per filtro: <code>Etichetta | parola chiave, parola chiave, …</code>. Il filtro raccoglie gli avvisi che contengono una delle parole nel titolo o nella descrizione. Compaiono solo i filtri con almeno un avviso.</p>
-							<details>
-								<summary>Come scrivere le parole chiave</summary>
-								<p>Le parole sono intere e maiuscole/minuscole indifferenti. Con <code>=</code> davanti la parola deve rispettare maiuscole/minuscole (es. <code>=iOS</code> non trova "Cisco IOS"); con <code>*</code> in fondo la parola può continuare (es. <code>dotnet*</code> trova "dotnet8.0"). Elencare i prodotti del vendor fa comparire l'avviso anche quando non cita il nome del vendor.<br>
-								Utile per i vendor con termini d'uso restrittivi (i loro feed non vengono mai letti) e per prodotti e tecnologie senza fonte propria. Righe con <code>#</code> ignorate. "Ripristina predefiniti" carica l'elenco aggiornato del plugin.</p>
-							</details>
-							<textarea id="agv-topics" name="<?php echo $opt; // phpcs:ignore WordPress.Security.EscapeOutput ?>[topics]" rows="22" class="large-text code" spellcheck="false"><?php echo esc_textarea( $s['topics'] ); ?></textarea>
+							<div class="agv-split">
+								<div class="agv-main">
+									<h2><label for="agv-topics">Filtri per argomento</label></h2>
+									<p>Una riga per filtro. Nella pagina pubblica compaiono solo i filtri con almeno un avviso.</p>
+									<textarea id="agv-topics" name="<?php echo $opt; // phpcs:ignore WordPress.Security.EscapeOutput ?>[topics]" rows="26" class="large-text code" spellcheck="false"><?php echo esc_textarea( $s['topics'] ); ?></textarea>
+								</div>
+								<aside class="agv-help" aria-label="Guida alle parole chiave">
+									<h3>Formato della riga</h3>
+									<p><code>Etichetta | parola, parola, …</code></p>
+									<p>Il filtro raccoglie gli avvisi che contengono una delle parole nel titolo o nella descrizione: parole intere, maiuscole/minuscole indifferenti.</p>
+									<h3>Simboli</h3>
+									<ul>
+										<li><code>=iOS</code> rispetta maiuscole/minuscole: non trova "Cisco IOS"</li>
+										<li><code>dotnet*</code> la parola può continuare: trova "dotnet8.0"</li>
+										<li><code>#</code> a inizio riga: filtro disattivato</li>
+									</ul>
+									<h3>Suggerimenti</h3>
+									<p>Elencare i prodotti del vendor fa comparire l'avviso anche quando non cita il nome del vendor. Utile per i vendor con termini d'uso restrittivi, i cui feed non vengono letti.</p>
+									<p>"Ripristina predefiniti" carica l'elenco aggiornato del plugin.</p>
+								</aside>
+							</div>
 
 						<?php else : ?>
 							<h2>Opzioni</h2>
-							<table class="form-table" role="presentation">
-								<tr>
-									<th scope="row"><label for="agv-max">Avvisi per fonte</label></th>
-									<td><input id="agv-max" type="number" min="1" max="100" class="small-text" name="<?php echo $opt; // phpcs:ignore WordPress.Security.EscapeOutput ?>[max_per_source]" value="<?php echo esc_attr( $s['max_per_source'] ); ?>"><p class="description">Massimo di avvisi raccolti da ciascuna fonte (1–100).</p></td>
-								</tr>
-								<tr>
-									<th scope="row"><label for="agv-days">Finestra (giorni)</label></th>
-									<td><input id="agv-days" type="number" min="1" max="365" class="small-text" name="<?php echo $opt; // phpcs:ignore WordPress.Security.EscapeOutput ?>[max_days]" value="<?php echo esc_attr( $s['max_days'] ); ?>"><p class="description">Gli avvisi più vecchi non vengono mostrati.</p></td>
-								</tr>
-								<tr>
-									<th scope="row"><label for="agv-int">Aggiornamento ogni (ore)</label></th>
-									<td><input id="agv-int" type="number" min="1" max="24" class="small-text" name="<?php echo $opt; // phpcs:ignore WordPress.Security.EscapeOutput ?>[interval_hours]" value="<?php echo esc_attr( $s['interval_hours'] ); ?>"></td>
-								</tr>
-								<tr>
-									<th scope="row"><label for="agv-disc">Disclaimer</label></th>
-									<td><textarea id="agv-disc" name="<?php echo $opt; // phpcs:ignore WordPress.Security.EscapeOutput ?>[disclaimer]" rows="4" class="large-text"><?php echo esc_textarea( $s['disclaimer'] ); ?></textarea><p class="description">Mostrato in fondo all'elenco nella pagina pubblica.</p></td>
-								</tr>
-							</table>
+							<div class="agv-fields">
+								<div class="agv-field">
+									<label for="agv-max">Avvisi per fonte</label>
+									<input id="agv-max" type="number" min="1" max="100" class="small-text" name="<?php echo $opt; // phpcs:ignore WordPress.Security.EscapeOutput ?>[max_per_source]" value="<?php echo esc_attr( $s['max_per_source'] ); ?>">
+									<p class="description">Massimo raccolto da ciascuna fonte (1–100).</p>
+								</div>
+								<div class="agv-field">
+									<label for="agv-days">Finestra (giorni)</label>
+									<input id="agv-days" type="number" min="1" max="365" class="small-text" name="<?php echo $opt; // phpcs:ignore WordPress.Security.EscapeOutput ?>[max_days]" value="<?php echo esc_attr( $s['max_days'] ); ?>">
+									<p class="description">Gli avvisi più vecchi non vengono mostrati (1–365).</p>
+								</div>
+								<div class="agv-field">
+									<label for="agv-int">Aggiornamento ogni (ore)</label>
+									<input id="agv-int" type="number" min="1" max="24" class="small-text" name="<?php echo $opt; // phpcs:ignore WordPress.Security.EscapeOutput ?>[interval_hours]" value="<?php echo esc_attr( $s['interval_hours'] ); ?>">
+									<p class="description">Frequenza di lettura delle fonti (1–24).</p>
+								</div>
+								<div class="agv-field agv-wide">
+									<label for="agv-disc">Disclaimer</label>
+									<textarea id="agv-disc" name="<?php echo $opt; // phpcs:ignore WordPress.Security.EscapeOutput ?>[disclaimer]" rows="3" class="large-text"><?php echo esc_textarea( $s['disclaimer'] ); ?></textarea>
+									<p class="description">Mostrato in fondo all'elenco nella pagina pubblica.</p>
+								</div>
+							</div>
 						<?php endif; ?>
 
 						<div class="agv-bar">
