@@ -2,7 +2,7 @@
 /**
  * Plugin Name:       Aggiornamenti Vendor
  * Description:       Aggrega lato server advisory e aggiornamenti dei vendor (feed RSS, CSAF, errata AlmaLinux, CISA KEV) e li mostra con lo shortcode [aggiornamenti_vendor].
- * Version:           2.4.0
+ * Version:           2.5.0
  * Requires at least: 6.0
  * Requires PHP:      7.4
  * Update URI:        https://github.com/erosmilano-cyber/aggiornamenti-vendor
@@ -68,19 +68,88 @@ TXT;
 
 	/**
 	 * Filtri per argomento: raggruppano gli avvisi delle fonti attive che citano un vendor.
-	 * Pensati per i vendor con termini d'uso restrittivi (fonti 🔴), che non si leggono mai direttamente.
-	 * Formato riga: Etichetta | parola chiave, parola chiave, ... (parole intere, maiuscole/minuscole indifferenti)
+	 * Prima i vendor con termini d'uso restrittivi (fonti 🔴, mai letti direttamente), poi vendor, piattaforme,
+	 * linguaggi e software diffusi senza fonte propria. Non si duplicano le fonti attive (Cisco, Red Hat, Debian…).
+	 * Formato riga: Etichetta | parola chiave, parola chiave, ... (parole intere, maiuscole/minuscole indifferenti;
+	 * con "=" davanti la parola deve rispettare maiuscole/minuscole: =iOS non trova "Cisco IOS";
+	 * con "*" in fondo la parola può continuare: dotnet* trova "dotnet8.0").
+	 * Ogni argomento elenca i prodotti del vendor, così l'avviso compare anche se non cita il nome del vendor.
 	 */
 	public static function default_topics() {
 		return <<<'TXT'
-Microsoft | Microsoft, Windows, Exchange Server, SharePoint, Outlook, Azure, Hyper-V, Microsoft 365, Office 365
+Microsoft | Microsoft, Windows, Exchange Server, SharePoint, Outlook, Azure, Hyper-V, Microsoft 365, Office 365, Visual Studio, SQL Server, PowerShell, MSHTML, Win32k, Entra ID, Intune, Dynamics 365, Power BI, OneDrive, OneNote, Skype, BitLocker, =Excel, PowerPoint, .NET, ASP.NET, dotnet*
 Ubuntu | Ubuntu
-Fortinet | Fortinet, FortiOS, FortiGate, FortiWeb, FortiManager, FortiAnalyzer, FortiClient, FortiProxy, FortiSIEM, FortiSwitch
-Palo Alto | Palo Alto Networks, PAN-OS, GlobalProtect, Prisma Access, Cortex XDR
-Ubiquiti | Ubiquiti, UniFi, EdgeRouter
+Fortinet | Fortinet, FortiOS, FortiGate, FortiWeb, FortiManager, FortiAnalyzer, FortiClient, FortiProxy, FortiSIEM, FortiSwitch, FortiMail, FortiNAC, FortiSandbox, FortiADC, FortiVoice, FortiAP, FortiEDR, FortiSOAR
+Palo Alto | Palo Alto Networks, PAN-OS, GlobalProtect, Prisma Access, Prisma Cloud, Cortex XDR, Cortex XSOAR
+Ubiquiti | Ubiquiti, UniFi, EdgeRouter, EdgeSwitch, UISP
 Juniper | Juniper, Junos
-SonicWall | SonicWall, SonicOS, SMA 100
-WatchGuard | WatchGuard, Fireware
+SonicWall | SonicWall, SonicOS, SMA 100, SMA 1000, NetExtender
+WatchGuard | WatchGuard, Fireware, Firebox
+# Rete e sicurezza
+Check Point | Check Point, CloudGuard, ZoneAlarm, SmartConsole, Gaia OS
+Citrix | Citrix, NetScaler, XenServer, ShareFile
+Ivanti | Ivanti, Pulse Connect Secure, EPMM, MobileIron
+F5 | F5 Networks, =F5, BIG-IP, BIG-IQ, NGINX Plus
+Zyxel | Zyxel
+MikroTik | MikroTik, RouterOS, Winbox
+D-Link | D-Link
+TP-Link | TP-Link
+Netgear | Netgear
+QNAP | QNAP, =QTS, QuTS
+Synology | Synology, DiskStation
+Trend Micro | Trend Micro, Apex One, Deep Security
+SolarWinds | SolarWinds, Serv-U, Dameware
+Veeam | Veeam
+Zoho | Zoho, ManageEngine
+Progress | Progress Software, MOVEit, WS_FTP, Telerik, WhatsUp Gold, Kemp LoadMaster
+# Virtualizzazione e cloud
+VMware | VMware, ESXi, =ESX, vCenter, vSphere, NSX, Tanzu, Cloud Foundation
+Docker | Docker
+Kubernetes | Kubernetes, kubelet, kube-apiserver, ingress-nginx
+# Sistemi e piattaforme
+Apple | Apple, =iOS, iPadOS, macOS, tvOS, watchOS, visionOS, Safari, WebKit, iPhone, iPad, iCloud, Xcode, iTunes
+Google | Google, Chrome, Chromium, ChromeOS, =V8, Pixel, Gmail, Firebase, TensorFlow
+Android | Android
+Mozilla | Mozilla, Firefox, Thunderbird, SeaMonkey
+Samsung | Samsung, Exynos, =Galaxy
+Oracle | =Oracle, WebLogic, PeopleSoft, JD Edwards, E-Business Suite, Fusion Middleware, VirtualBox, Solaris, Java SE
+SAP | =SAP:, prodotti SAP, SAP Security Patch Day, NetWeaver, S/4HANA, BusinessObjects
+IBM | IBM, WebSphere, QRadar, =AIX, Db2, Aspera, Maximo, Cognos, Tivoli
+Dell | =Dell, iDRAC, PowerEdge, PowerScale, PowerProtect, Wyse
+Adobe | Adobe, Acrobat, ColdFusion, Magento, Photoshop, Illustrator, Experience Manager
+Atlassian | Atlassian, Confluence, Jira, Bitbucket, Bamboo
+# Linguaggi e runtime
+PHP | php*, Laravel
+JavaScript | JavaScript, TypeScript, npm, Next.js, Vue.js, =React, =Angular, jQuery
+Node.js | Node.js, nodejs*
+Python | python*, PyPI, Django
+Java | Java, OpenJDK, Spring Framework, Spring Boot
+.NET | .NET, ASP.NET, dotnet*, NuGet, Blazor
+Go | Golang
+Rust | Rust
+Ruby | Ruby, Rails
+# Server web, CMS e applicazioni
+Apache | Apache, Tomcat, Struts, ActiveMQ, Kafka, OFBiz, Log4j
+Nginx | nginx
+WordPress | WordPress, WooCommerce
+Drupal | Drupal
+Joomla | Joomla
+GitLab | GitLab
+Jenkins | Jenkins
+Zimbra | Zimbra
+Roundcube | Roundcube
+# Librerie e strumenti
+OpenSSL | openssl*
+OpenSSH | OpenSSH
+Log4j | Log4j, Log4Shell
+curl | curl, libcurl
+Samba | Samba
+# Database
+MySQL | mysql*, mariadb*
+PostgreSQL | postgresql*, Postgres
+Redis | redis*
+MongoDB | MongoDB
+Elasticsearch | Elasticsearch, Kibana, Logstash, =Elastic
 TXT;
 	}
 
@@ -108,7 +177,15 @@ TXT;
 		$hit = array();
 		foreach ( $topics as $key => $t ) {
 			foreach ( $t['words'] as $w ) {
-				if ( preg_match( '/(?<![\pL\pN])' . preg_quote( $w, '/' ) . '(?![\pL\pN])/iu', $text ) ) {
+				// "=" davanti: maiuscole/minuscole rispettate. Un apostrofo dopo la parola ne impedisce il riconoscimento
+				// (evita "dell'" → Dell nei testi in italiano).
+				// "*" in fondo: la parola può continuare (dotnet* trova "dotnet8.0", python* trova "python3.12").
+				$exact  = 0 === strpos( $w, '=' );
+				$w      = $exact ? substr( $w, 1 ) : $w;
+				$prefix = '*' === substr( $w, -1 );
+				$w      = $prefix ? substr( $w, 0, -1 ) : $w;
+				$end    = $prefix ? '' : "(?![\\pL\\pN'’])";
+				if ( '' !== $w && preg_match( '/(?<![\pL\pN])' . preg_quote( $w, '/' ) . $end . '/u' . ( $exact ? '' : 'i' ), $text ) ) {
 					$hit[] = $key;
 					break;
 				}
@@ -143,6 +220,7 @@ TXT;
 		add_action( 'admin_init', array( __CLASS__, 'maybe_upgrade' ) );
 		add_action( 'admin_post_agv_refresh_now', array( __CLASS__, 'handle_refresh_now' ) );
 		add_action( 'admin_post_agv_reset_sources', array( __CLASS__, 'handle_reset_sources' ) );
+		add_action( 'admin_post_agv_reset_topics', array( __CLASS__, 'handle_reset_topics' ) );
 		add_action( 'admin_post_agv_check_update', array( __CLASS__, 'handle_check_update' ) );
 		add_action( 'update_option_' . self::OPT_SETTINGS, array( __CLASS__, 'reschedule' ), 10, 0 );
 		// Aggiornamenti del plugin dalle GitHub Release (host dell'header "Update URI").
@@ -1017,6 +1095,18 @@ TXT;
 		exit;
 	}
 
+	public static function handle_reset_topics() {
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_die( 'Permesso negato.' );
+		}
+		check_admin_referer( 'agv_reset_topics' );
+		$s           = self::settings();
+		$s['topics'] = self::default_topics();
+		update_option( self::OPT_SETTINGS, $s );
+		wp_safe_redirect( admin_url( 'options-general.php?page=agv&agv_reset_topics=1' ) );
+		exit;
+	}
+
 	public static function admin_page() {
 		if ( ! current_user_can( 'manage_options' ) ) {
 			return;
@@ -1034,6 +1124,9 @@ TXT;
 			<?php endif; ?>
 			<?php if ( isset( $_GET['agv_reset'] ) ) : ?>
 				<div class="notice notice-success is-dismissible"><p>Fonti predefinite ripristinate.</p></div>
+			<?php endif; ?>
+			<?php if ( isset( $_GET['agv_reset_topics'] ) ) : ?>
+				<div class="notice notice-success is-dismissible"><p>Filtri per argomento predefiniti ripristinati.</p></div>
 			<?php endif; ?>
 			<?php if ( isset( $_GET['agv_upd'] ) ) : ?>
 				<?php $wp_upd = get_site_transient( 'update_plugins' ); ?>
@@ -1078,10 +1171,10 @@ TXT;
 					<tr>
 						<th scope="row"><label for="agv-topics">Filtri per argomento</label></th>
 						<td>
-							<textarea id="agv-topics" name="<?php echo esc_attr( self::OPT_SETTINGS ); ?>[topics]" rows="8" class="large-text code" style="white-space:pre;overflow-x:auto"><?php echo esc_textarea( $s['topics'] ); ?></textarea>
+							<textarea id="agv-topics" name="<?php echo esc_attr( self::OPT_SETTINGS ); ?>[topics]" rows="14" class="large-text code" style="white-space:pre;overflow-x:auto"><?php echo esc_textarea( $s['topics'] ); ?></textarea>
 							<p class="description">
-								Una riga per filtro: <code>Etichetta | parola chiave, parola chiave, …</code>. Il filtro raccoglie gli avvisi delle fonti attive che contengono una delle parole (parole intere, maiuscole/minuscole indifferenti) nel titolo o nella descrizione.<br>
-								Serve per i vendor con termini d'uso restrittivi: i loro feed non vengono mai letti. Compaiono solo i filtri con almeno un avviso. Righe con <code>#</code> ignorate.
+								Una riga per filtro: <code>Etichetta | parola chiave, parola chiave, …</code>. Il filtro raccoglie gli avvisi delle fonti attive che contengono una delle parole (parole intere, maiuscole/minuscole indifferenti) nel titolo o nella descrizione. Con <code>=</code> davanti la parola deve rispettare maiuscole/minuscole (es. <code>=iOS</code> non trova "Cisco IOS"); con <code>*</code> in fondo la parola può continuare (es. <code>dotnet*</code> trova "dotnet8.0"). Elencare i prodotti del vendor fa comparire l'avviso anche quando non cita il nome del vendor.<br>
+								Utile per i vendor con termini d'uso restrittivi (i loro feed non vengono mai letti) e per prodotti e tecnologie senza fonte propria. Compaiono solo i filtri con almeno un avviso. Righe con <code>#</code> ignorate. Il pulsante "Ripristina filtri per argomento predefiniti", sotto, carica l'elenco aggiornato.
 							</p>
 						</td>
 					</tr>
@@ -1107,6 +1200,11 @@ TXT;
 				<input type="hidden" name="action" value="agv_reset_sources">
 				<?php wp_nonce_field( 'agv_reset_sources' ); ?>
 				<?php submit_button( 'Ripristina fonti predefinite', 'secondary', 'submit', false ); ?>
+			</form>
+			<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="display:inline-block;margin-left:.5rem" onsubmit="return confirm('Sostituire i filtri per argomento con quelli predefiniti?');">
+				<input type="hidden" name="action" value="agv_reset_topics">
+				<?php wp_nonce_field( 'agv_reset_topics' ); ?>
+				<?php submit_button( 'Ripristina filtri per argomento predefiniti', 'secondary', 'submit', false ); ?>
 			</form>
 			<?php if ( ! empty( $data['sources'] ) ) : ?>
 				<table class="widefat striped" style="margin-top:1rem">
