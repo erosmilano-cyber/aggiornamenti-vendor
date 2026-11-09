@@ -2,7 +2,7 @@
 /**
  * Plugin Name:       Aggiornamenti Vendor
  * Description:       Aggrega lato server advisory e aggiornamenti dei vendor (feed RSS, CSAF, errata AlmaLinux, CISA KEV) e li mostra con lo shortcode [aggiornamenti_vendor].
- * Version:           2.5.0
+ * Version:           2.6.0
  * Requires at least: 6.0
  * Requires PHP:      7.4
  * Update URI:        https://github.com/erosmilano-cyber/aggiornamenti-vendor
@@ -742,6 +742,9 @@ TXT;
 				.agv-title{display:block;font-weight:600;line-height:1.4;overflow-wrap:anywhere}
 				.agv-card:hover .agv-title{text-decoration:underline;text-underline-offset:.15em}
 				.agv-desc{display:block;margin:.3rem 0 0;font-size:.86rem;line-height:1.5;color:var(--agv-muted);overflow-wrap:anywhere}
+				.agv-info{display:block;margin:.3rem 0 0;font-size:.82rem;line-height:1.5;color:var(--agv-muted);font-style:italic}
+				.agv-tags{display:inline-flex;flex-wrap:wrap;justify-content:flex-end;gap:.3rem;margin-left:auto}
+				.agv-tag{padding:0 .45rem;border:1px dashed color-mix(in srgb,currentColor 30%,transparent);border-radius:999px;font-size:.68rem;font-weight:600;line-height:1.5;color:var(--agv-muted)}
 				.agv-arrow{position:absolute;top:50%;right:1rem;transform:translateY(-50%);opacity:.35;transition:opacity .15s,transform .15s}
 				.agv-card:hover .agv-arrow{opacity:.9;transform:translate(2px,-50%)}
 				.agv-search{position:relative;margin:0 0 1rem}
@@ -816,10 +819,20 @@ TXT;
 												<?php if ( $it['ts'] > $now - DAY_IN_SECONDS ) : ?>
 													<span class="agv-new">Nuovo</span>
 												<?php endif; ?>
+												<?php if ( $it['topics'] ) : ?>
+													<span class="agv-tags">
+														<?php foreach ( $it['topics'] as $tk ) : ?>
+															<span class="agv-tag"><?php echo esc_html( $topics[ $tk ]['label'] ); ?></span>
+														<?php endforeach; ?>
+													</span>
+												<?php endif; ?>
 											</span>
 											<span class="agv-title"><?php echo esc_html( $it['text'] ); ?></span>
 											<?php if ( '' !== $it['desc'] ) : ?>
 												<span class="agv-desc"><?php echo esc_html( $it['desc'] ); ?></span>
+											<?php else : ?>
+												<?php // Nessun testo del vendor disponibile: riga di servizio generata dal plugin. ?>
+												<span class="agv-info">Pubblicato da <?php echo esc_html( $it['vendor'] ); ?><?php echo ( $it['ts'] && '00:00' !== gmdate( 'H:i', $it['ts'] ) ) ? esc_html( ' alle ' . wp_date( get_option( 'time_format' ), $it['ts'] ) ) : ''; ?> · dettagli sul sito della fonte</span>
 											<?php endif; ?>
 											<span class="agv-arrow" aria-hidden="true">↗</span>
 											<span class="agv-sr">(si apre in una nuova scheda)</span>
@@ -864,7 +877,7 @@ TXT;
 				var btns=root.querySelectorAll('.agv-filters button'),rows=root.querySelectorAll('.agv-list li'),groups=root.querySelectorAll('.agv-group'),count=root.querySelector('.agv-count'),input=root.querySelector('.agv-q'),none=root.querySelector('.agv-noresult'),sel={v:'',t:'',l:''},q='';
 				// Ricerca solo nel browser del visitatore: nessuna richiesta al server, nulla viene registrato.
 				function norm(s){s=(s||'').toLowerCase();return s.normalize?s.normalize('NFD').replace(/[\u0300-\u036f]/g,''):s;}
-				rows.forEach(function(r){r.agvText=norm([].map.call(r.querySelectorAll('.agv-vendor,.agv-title,.agv-desc'),function(e){return e.textContent;}).join(' '));});
+				rows.forEach(function(r){r.agvText=norm([].map.call(r.querySelectorAll('.agv-vendor,.agv-title,.agv-desc,.agv-tag'),function(e){return e.textContent;}).join(' '));});
 				function apply(){
 					var words=norm(q).split(/\s+/).filter(Boolean),n=0;
 					rows.forEach(function(r){
