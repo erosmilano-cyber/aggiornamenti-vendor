@@ -2,7 +2,7 @@
 /**
  * Plugin Name:       Aggiornamenti Vendor
  * Description:       Aggrega lato server advisory e aggiornamenti dei vendor (feed RSS, CSAF, errata AlmaLinux, CISA KEV) e li mostra con lo shortcode [aggiornamenti_vendor].
- * Version:           2.3.0
+ * Version:           2.4.0
  * Requires at least: 6.0
  * Requires PHP:      7.4
  * Update URI:        https://github.com/erosmilano-cyber/aggiornamenti-vendor
@@ -66,6 +66,57 @@ Proxmox (release) | https://forum.proxmox.com/forums/announcements.7/index.rss |
 TXT;
 	}
 
+	/**
+	 * Filtri per argomento: raggruppano gli avvisi delle fonti attive che citano un vendor.
+	 * Pensati per i vendor con termini d'uso restrittivi (fonti 🔴), che non si leggono mai direttamente.
+	 * Formato riga: Etichetta | parola chiave, parola chiave, ... (parole intere, maiuscole/minuscole indifferenti)
+	 */
+	public static function default_topics() {
+		return <<<'TXT'
+Microsoft | Microsoft, Windows, Exchange Server, SharePoint, Outlook, Azure, Hyper-V, Microsoft 365, Office 365
+Ubuntu | Ubuntu
+Fortinet | Fortinet, FortiOS, FortiGate, FortiWeb, FortiManager, FortiAnalyzer, FortiClient, FortiProxy, FortiSIEM, FortiSwitch
+Palo Alto | Palo Alto Networks, PAN-OS, GlobalProtect, Prisma Access, Cortex XDR
+Ubiquiti | Ubiquiti, UniFi, EdgeRouter
+Juniper | Juniper, Junos
+SonicWall | SonicWall, SonicOS, SMA 100
+WatchGuard | WatchGuard, Fireware
+TXT;
+	}
+
+	public static function parse_topics( $raw ) {
+		$out = array();
+		foreach ( preg_split( '/\r\n|\r|\n/', (string) $raw ) as $line ) {
+			$line = trim( $line );
+			if ( '' === $line || 0 === strpos( $line, '#' ) || false === strpos( $line, '|' ) ) {
+				continue;
+			}
+			list( $label, $words ) = array_map( 'trim', explode( '|', $line, 2 ) );
+			$label = sanitize_text_field( $label );
+			$words = array_values( array_filter( array_map( 'trim', explode( ',', $words ) ), 'strlen' ) );
+			if ( '' === $label || ! $words ) {
+				continue;
+			}
+			$slug = trim( preg_replace( '/[^a-z0-9]+/', '-', strtolower( $label ) ), '-' );
+			$out[ '' !== $slug ? $slug : 't' . count( $out ) ] = array( 'label' => $label, 'words' => $words );
+		}
+		return $out;
+	}
+
+	/** Chiavi degli argomenti citati nel testo (parole intere, senza distinzione di maiuscole). */
+	public static function match_topics( $text, $topics ) {
+		$hit = array();
+		foreach ( $topics as $key => $t ) {
+			foreach ( $t['words'] as $w ) {
+				if ( preg_match( '/(?<![\pL\pN])' . preg_quote( $w, '/' ) . '(?![\pL\pN])/iu', $text ) ) {
+					$hit[] = $key;
+					break;
+				}
+			}
+		}
+		return $hit;
+	}
+
 	public static function defaults() {
 		return array(
 			'version'        => self::VERSION,
@@ -73,6 +124,7 @@ TXT;
 			'max_per_source' => 15,
 			'max_days'       => 30,
 			'interval_hours' => 3,
+			'topics'         => self::default_topics(),
 			'disclaimer'     => "Pagina a scopo informativo, aggiornata automaticamente da fonti pubbliche. L'elenco non è esaustivo: fanno fede esclusivamente gli advisory originali, raggiungibili dai link. Marchi e nomi citati appartengono ai rispettivi titolari; questo sito non è affiliato ai vendor elencati.",
 		);
 	}
@@ -511,6 +563,7 @@ TXT;
 
 		$items  = array();
 		$labels = array();
+		$topics = self::parse_topics( $s['topics'] );
 		foreach ( $data['sources'] as $src ) {
 			$labels[ $src['label'] ] = true;
 			foreach ( $src['items'] as $it ) {
@@ -518,6 +571,8 @@ TXT;
 					'vendor' => $src['label'],
 					'text'   => self::display_text( $src, $it ),
 					'desc'   => 'completo' === $src['mode'] ? (string) ( $it['desc'] ?? '' ) : '',
+					// Classificazione sul testo memorizzato; nella pagina finisce solo l'etichetta del filtro.
+					'topics' => self::match_topics( $it['title'] . ' ' . ( $it['desc'] ?? '' ), $topics ),
 					'link'   => $it['link'],
 					'ts'     => $it['ts'],
 				);
@@ -536,10 +591,14 @@ TXT;
 		$yday     = wp_date( 'Y-m-d', $now - DAY_IN_SECONDS );
 
 		// Conteggio per fonte (solo fonti con avvisi nel periodo) e raggruppamento per giorno.
-		$counts = array();
-		$groups = array();
+		$counts  = array();
+		$tcounts = array();
+		$groups  = array();
 		foreach ( $items as $it ) {
 			$counts[ $it['vendor'] ] = ( $counts[ $it['vendor'] ] ?? 0 ) + 1;
+			foreach ( $it['topics'] as $tk ) {
+				$tcounts[ $tk ] = ( $tcounts[ $tk ] ?? 0 ) + 1;
+			}
 			$key = $it['ts'] ? wp_date( 'Y-m-d', $it['ts'] ) : '';
 			if ( ! isset( $groups[ $key ] ) ) {
 				if ( '' === $key ) {
@@ -574,7 +633,15 @@ TXT;
 				.agv *{box-sizing:border-box}
 				.agv-meta{display:flex;flex-wrap:wrap;align-items:center;gap:.35rem .6rem;margin:0 0 1rem;color:var(--agv-muted);font-size:.85rem}
 				.agv-live{width:.5rem;height:.5rem;border-radius:50%;background:#16a34a;box-shadow:0 0 0 3px color-mix(in srgb,#16a34a 22%,transparent)}
-				.agv-filters{display:flex;flex-wrap:wrap;gap:.5rem;margin:0 0 1.25rem}
+				.agv-fwrap{position:relative;margin:0 0 .75rem}
+				.agv-filters{display:flex;flex-wrap:wrap;align-items:center;gap:.5rem;margin:0}
+				.agv-more{display:none;position:absolute;right:-.15rem;top:0;bottom:0;width:1.1rem;align-items:center;justify-content:center;color:inherit;opacity:.6;cursor:pointer;transition:opacity .15s}
+				.agv-more:hover{opacity:.9}
+				.agv-fwrap.agv-overflow .agv-more{display:flex}
+				.agv-fwrap.agv-overflow .agv-filters{-webkit-mask-image:linear-gradient(to right,#000 calc(100% - 3rem),transparent calc(100% - .5rem));mask-image:linear-gradient(to right,#000 calc(100% - 3rem),transparent calc(100% - .5rem))}
+				.agv-list{margin-top:1.25rem}
+				.agv-flabel{flex:none;min-width:5.5rem;font-size:.72rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--agv-muted)}
+				.agv-topics button{border-style:dashed;background:transparent}
 				.agv-filters button{display:inline-flex;align-items:center;gap:.45rem;margin:0;border:1px solid var(--agv-line);background:var(--agv-soft);color:inherit;border-radius:999px;padding:.4rem .85rem;font:inherit;font-size:.85rem;line-height:1.2;cursor:pointer;transition:background-color .15s,border-color .15s,color .15s}
 				.agv-filters button:hover{border-color:color-mix(in srgb,currentColor 40%,transparent)}
 				.agv-filters button[aria-pressed="true"]{background:var(--agv-acc);border-color:var(--agv-acc);color:#fff}
@@ -599,6 +666,13 @@ TXT;
 				.agv-desc{display:block;margin:.3rem 0 0;font-size:.86rem;line-height:1.5;color:var(--agv-muted);overflow-wrap:anywhere}
 				.agv-arrow{position:absolute;top:50%;right:1rem;transform:translateY(-50%);opacity:.35;transition:opacity .15s,transform .15s}
 				.agv-card:hover .agv-arrow{opacity:.9;transform:translate(2px,-50%)}
+				.agv-search{position:relative;margin:0 0 1rem}
+				.agv-search-ico{position:absolute;left:.85rem;top:50%;transform:translateY(-50%);color:var(--agv-muted);pointer-events:none}
+				.agv .agv-q{display:block;width:100%;margin:0;padding:.65rem .9rem .65rem 2.5rem;border:1px solid var(--agv-line);border-radius:.65rem;background:var(--agv-soft);color:inherit;font:inherit;font-size:.95rem;line-height:1.3;box-shadow:none;-webkit-appearance:none;appearance:none}
+				.agv .agv-q::placeholder{color:var(--agv-muted);opacity:1}
+				.agv .agv-q:focus{outline:2px solid var(--agv-acc);outline-offset:1px;border-color:transparent}
+				.agv-noresult{margin:1.25rem 0;padding:1rem;border:1px dashed var(--agv-line);border-radius:.65rem;text-align:center;color:var(--agv-muted)}
+				.agv-noresult[hidden]{display:none}
 				.agv-sr{position:absolute;width:1px;height:1px;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 				.agv-sources{margin-top:2rem;padding-top:1rem;border-top:1px solid var(--agv-line);font-size:.82rem;color:var(--agv-muted)}
 				.agv-sources-title{margin:0 0 .5rem;font-size:.78rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase}
@@ -621,20 +695,43 @@ TXT;
 			<?php if ( empty( $items ) ) : ?>
 				<p class="agv-empty">Nessun aggiornamento nel periodo considerato.</p>
 			<?php else : ?>
+				<div class="agv-search" role="search">
+					<label class="agv-sr" for="<?php echo esc_attr( $uid ); ?>-q">Cerca negli avvisi</label>
+					<svg class="agv-search-ico" viewBox="0 0 20 20" width="18" height="18" aria-hidden="true" focusable="false"><circle cx="8.5" cy="8.5" r="5.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="m13 13 4.5 4.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+					<input id="<?php echo esc_attr( $uid ); ?>-q" class="agv-q" type="search" placeholder="Cerca per prodotto, CVE, vendor…" autocomplete="off" spellcheck="false" maxlength="100">
+				</div>
+				<div class="agv-fwrap">
 				<div class="agv-filters" role="group" aria-label="Filtra per fonte">
-					<button type="button" data-v="" aria-pressed="true">Tutti <span class="agv-n"><?php echo (int) $total; ?></span></button>
+					<span class="agv-flabel" aria-hidden="true">Fonti</span>
+					<button type="button" data-v="" data-l="" aria-pressed="true">Tutti <span class="agv-n"><?php echo (int) $total; ?></span></button>
 					<?php foreach ( $counts as $l => $n ) : ?>
-						<button type="button" data-v="<?php echo esc_attr( $l ); ?>" aria-pressed="false" style="--agv-c:<?php echo esc_attr( $color[ $l ] ); ?>"><span class="agv-dot" aria-hidden="true"></span><?php echo esc_html( $l ); ?> <span class="agv-n"><?php echo (int) $n; ?></span></button>
+						<button type="button" data-v="<?php echo esc_attr( $l ); ?>" data-l="<?php echo esc_attr( $l ); ?>" aria-pressed="false" style="--agv-c:<?php echo esc_attr( $color[ $l ] ); ?>"><span class="agv-dot" aria-hidden="true"></span><?php echo esc_html( $l ); ?> <span class="agv-n"><?php echo (int) $n; ?></span></button>
 					<?php endforeach; ?>
 				</div>
+				<span class="agv-more" aria-hidden="true"><svg viewBox="0 0 20 20" width="18" height="18" focusable="false"><path d="M7.5 4.5 13 10l-5.5 5.5" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+				</div>
+				<?php if ( $tcounts ) : ?>
+					<div class="agv-fwrap">
+					<div class="agv-filters agv-topics" role="group" aria-label="Filtra per argomento: avvisi delle fonti sopra che citano il vendor">
+						<span class="agv-flabel" aria-hidden="true">Argomenti</span>
+						<?php foreach ( $topics as $tk => $t ) : ?>
+							<?php if ( ! empty( $tcounts[ $tk ] ) ) : ?>
+								<button type="button" data-t="<?php echo esc_attr( $tk ); ?>" data-l="<?php echo esc_attr( $t['label'] ); ?>" aria-pressed="false"><?php echo esc_html( $t['label'] ); ?> <span class="agv-n"><?php echo (int) $tcounts[ $tk ]; ?></span></button>
+							<?php endif; ?>
+						<?php endforeach; ?>
+					</div>
+					<span class="agv-more" aria-hidden="true"><svg viewBox="0 0 20 20" width="18" height="18" focusable="false"><path d="M7.5 4.5 13 10l-5.5 5.5" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+					</div>
+				<?php endif; ?>
 
+				<p class="agv-noresult" hidden>Nessun avviso corrisponde alla ricerca. Prova con meno parole o rimuovi il filtro.</p>
 				<div class="agv-list">
 					<?php foreach ( $groups as $g ) : ?>
 						<section class="agv-group">
 							<h3 class="agv-day"><?php echo esc_html( $g['label'] ); ?><?php if ( '' !== $g['sub'] ) : ?> <span><?php echo esc_html( $g['sub'] ); ?></span><?php endif; ?></h3>
 							<ul>
 								<?php foreach ( $g['items'] as $it ) : ?>
-									<li data-v="<?php echo esc_attr( $it['vendor'] ); ?>" style="--agv-c:<?php echo esc_attr( $color[ $it['vendor'] ] ); ?>">
+									<li data-v="<?php echo esc_attr( $it['vendor'] ); ?>" data-t="<?php echo esc_attr( implode( ' ', $it['topics'] ) ); ?>" style="--agv-c:<?php echo esc_attr( $color[ $it['vendor'] ] ); ?>">
 										<a class="agv-card" href="<?php echo esc_url( $it['link'] ); ?>" target="_blank" rel="noopener noreferrer nofollow">
 											<span class="agv-top">
 												<span class="agv-vendor"><span class="agv-dot" aria-hidden="true"></span><?php echo esc_html( $it['vendor'] ); ?></span>
@@ -686,14 +783,40 @@ TXT;
 			(function(){
 				var root=document.getElementById(<?php echo wp_json_encode( $uid ); ?>);
 				if(!root)return;
-				var btns=root.querySelectorAll('.agv-filters button'),rows=root.querySelectorAll('.agv-list li'),groups=root.querySelectorAll('.agv-group'),count=root.querySelector('.agv-count');
-				btns.forEach(function(b){b.addEventListener('click',function(){
-					var v=b.getAttribute('data-v'),n=0;
-					btns.forEach(function(x){x.setAttribute('aria-pressed',x===b?'true':'false');});
-					rows.forEach(function(r){r.hidden=!!v&&r.getAttribute('data-v')!==v;if(!r.hidden)n++;});
+				var btns=root.querySelectorAll('.agv-filters button'),rows=root.querySelectorAll('.agv-list li'),groups=root.querySelectorAll('.agv-group'),count=root.querySelector('.agv-count'),input=root.querySelector('.agv-q'),none=root.querySelector('.agv-noresult'),sel={v:'',t:'',l:''},q='';
+				// Ricerca solo nel browser del visitatore: nessuna richiesta al server, nulla viene registrato.
+				function norm(s){s=(s||'').toLowerCase();return s.normalize?s.normalize('NFD').replace(/[\u0300-\u036f]/g,''):s;}
+				rows.forEach(function(r){r.agvText=norm([].map.call(r.querySelectorAll('.agv-vendor,.agv-title,.agv-desc'),function(e){return e.textContent;}).join(' '));});
+				function apply(){
+					var words=norm(q).split(/\s+/).filter(Boolean),n=0;
+					rows.forEach(function(r){
+						var ok=sel.t?(' '+r.getAttribute('data-t')+' ').indexOf(' '+sel.t+' ')>=0:(!sel.v||r.getAttribute('data-v')===sel.v);
+						for(var i=0;ok&&i<words.length;i++){if(r.agvText.indexOf(words[i])<0)ok=false;}
+						r.hidden=!ok;if(ok)n++;
+					});
 					groups.forEach(function(g){g.hidden=!g.querySelector('li:not([hidden])');});
-					if(count)count.textContent=n+(n===1?' avviso':' avvisi')+(v?' · '+v:'');
+					if(none)none.hidden=n>0;
+					if(count)count.textContent=n+(n===1?' avviso':' avvisi')+(sel.l?' · '+sel.l:'')+(q.trim()?' · \u201c'+q.trim()+'\u201d':'');
+				}
+				btns.forEach(function(b){b.addEventListener('click',function(){
+					sel={v:b.getAttribute('data-v')||'',t:b.getAttribute('data-t')||'',l:b.getAttribute('data-l')||''};
+					btns.forEach(function(x){x.setAttribute('aria-pressed',x===b?'true':'false');});
+					apply();
 				});});
+				// Righe di filtri scorrevoli (smartphone): freccia a destra finché ci sono altri filtri; un tocco fa scorrere.
+				var still=window.matchMedia&&window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+				root.querySelectorAll('.agv-fwrap').forEach(function(w){
+					var f=w.querySelector('.agv-filters'),m=w.querySelector('.agv-more');
+					function upd(){w.classList.toggle('agv-overflow',f.scrollLeft+f.clientWidth<f.scrollWidth-4);}
+					f.addEventListener('scroll',upd,{passive:true});
+					window.addEventListener('resize',upd);
+					if(m)m.addEventListener('click',function(){f.scrollBy({left:f.clientWidth*.7,behavior:still?'auto':'smooth'});});
+					upd();
+				});
+				if(input){
+					input.addEventListener('input',function(){q=input.value;apply();});
+					input.addEventListener('keydown',function(e){if(e.key==='Escape'){input.value='';q='';apply();}});
+				}
 			})();
 			</script>
 		</div>
@@ -866,6 +989,7 @@ TXT;
 			'max_per_source' => isset( $in['max_per_source'] ) ? min( 100, max( 1, (int) $in['max_per_source'] ) ) : $d['max_per_source'],
 			'max_days'       => isset( $in['max_days'] ) ? min( 365, max( 1, (int) $in['max_days'] ) ) : $d['max_days'],
 			'interval_hours' => isset( $in['interval_hours'] ) ? min( 24, max( 1, (int) $in['interval_hours'] ) ) : $d['interval_hours'],
+			'topics'         => isset( $in['topics'] ) ? sanitize_textarea_field( $in['topics'] ) : $d['topics'],
 			'disclaimer'     => isset( $in['disclaimer'] ) ? sanitize_textarea_field( $in['disclaimer'] ) : $d['disclaimer'],
 		);
 	}
@@ -950,6 +1074,16 @@ TXT;
 					<tr>
 						<th scope="row"><label for="agv-int">Aggiornamento ogni (ore)</label></th>
 						<td><input id="agv-int" type="number" min="1" max="24" name="<?php echo esc_attr( self::OPT_SETTINGS ); ?>[interval_hours]" value="<?php echo esc_attr( $s['interval_hours'] ); ?>"></td>
+					</tr>
+					<tr>
+						<th scope="row"><label for="agv-topics">Filtri per argomento</label></th>
+						<td>
+							<textarea id="agv-topics" name="<?php echo esc_attr( self::OPT_SETTINGS ); ?>[topics]" rows="8" class="large-text code" style="white-space:pre;overflow-x:auto"><?php echo esc_textarea( $s['topics'] ); ?></textarea>
+							<p class="description">
+								Una riga per filtro: <code>Etichetta | parola chiave, parola chiave, …</code>. Il filtro raccoglie gli avvisi delle fonti attive che contengono una delle parole (parole intere, maiuscole/minuscole indifferenti) nel titolo o nella descrizione.<br>
+								Serve per i vendor con termini d'uso restrittivi: i loro feed non vengono mai letti. Compaiono solo i filtri con almeno un avviso. Righe con <code>#</code> ignorate.
+							</p>
+						</td>
 					</tr>
 					<tr>
 						<th scope="row"><label for="agv-disc">Disclaimer</label></th>
