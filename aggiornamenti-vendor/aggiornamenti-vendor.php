@@ -2,7 +2,7 @@
 /**
  * Plugin Name:       Aggiornamenti Vendor
  * Description:       Aggrega lato server advisory e aggiornamenti dei vendor (feed RSS, CSAF, errata AlmaLinux, CISA KEV) e li mostra con lo shortcode [aggiornamenti_vendor].
- * Version:           2.6.1
+ * Version:           2.7.0
  * Requires at least: 6.0
  * Requires PHP:      7.4
  * Update URI:        https://github.com/erosmilano-cyber/aggiornamenti-vendor
@@ -1014,7 +1014,7 @@ TXT;
 			require_once ABSPATH . WPINC . '/update.php';
 		}
 		wp_update_plugins();
-		wp_safe_redirect( admin_url( 'options-general.php?page=agv&agv_upd=1' ) );
+		wp_safe_redirect( self::page_url( 'panoramica', '&agv_upd=1' ) );
 		exit;
 	}
 
@@ -1078,7 +1078,8 @@ TXT;
 	}
 
 	public static function sanitize_settings( $in ) {
-		$d = self::defaults();
+		// Ogni scheda invia solo i propri campi: quelli assenti restano come sono salvati.
+		$d = self::settings();
 		return array(
 			'version'        => self::VERSION,
 			'sources'        => isset( $in['sources'] ) ? sanitize_textarea_field( $in['sources'] ) : $d['sources'],
@@ -1097,7 +1098,7 @@ TXT;
 		check_admin_referer( 'agv_refresh_now' );
 		delete_transient( self::LOCK );
 		self::refresh();
-		wp_safe_redirect( admin_url( 'options-general.php?page=agv&agv_done=1' ) );
+		wp_safe_redirect( self::page_url( 'panoramica', '&agv_done=1' ) );
 		exit;
 	}
 
@@ -1109,7 +1110,7 @@ TXT;
 		$s            = self::settings();
 		$s['sources'] = self::default_sources();
 		update_option( self::OPT_SETTINGS, $s );
-		wp_safe_redirect( admin_url( 'options-general.php?page=agv&agv_reset=1' ) );
+		wp_safe_redirect( self::page_url( 'fonti', '&agv_reset=1' ) );
 		exit;
 	}
 
@@ -1121,21 +1122,95 @@ TXT;
 		$s           = self::settings();
 		$s['topics'] = self::default_topics();
 		update_option( self::OPT_SETTINGS, $s );
-		wp_safe_redirect( admin_url( 'options-general.php?page=agv&agv_reset_topics=1' ) );
+		wp_safe_redirect( self::page_url( 'argomenti', '&agv_reset_topics=1' ) );
 		exit;
+	}
+
+	/** Schede della pagina di impostazioni: chiave => etichetta. */
+	const TABS = array(
+		'panoramica' => 'Panoramica',
+		'fonti'      => 'Fonti',
+		'argomenti'  => 'Argomenti',
+		'opzioni'    => 'Opzioni',
+	);
+
+	/** URL della pagina di impostazioni su una scheda, con eventuali parametri di esito. */
+	public static function page_url( $tab = 'panoramica', $extra = '' ) {
+		return admin_url( 'options-general.php?page=agv' . ( 'panoramica' === $tab ? '' : '&tab=' . $tab ) . $extra );
+	}
+
+	/** Stato dell'aggiornatore per la Panoramica: versione installata, ultima Release, aggiornamento proposto da WordPress. */
+	public static function update_status() {
+		$file      = plugin_basename( __FILE__ );
+		$installed = get_file_data( __FILE__, array( 'v' => 'Version' ) );
+		$wp        = get_site_transient( 'update_plugins' );
+		$offer     = is_object( $wp ) && ! empty( $wp->response[ $file ]->new_version ) ? (string) $wp->response[ $file ]->new_version : '';
+		$upd       = get_transient( self::UPD_CACHE );
+		return array(
+			'file'      => $file,
+			'installed' => (string) $installed['v'],
+			'release'   => is_array( $upd ) && ! isset( $upd['error'] ) ? $upd : null,
+			'error'     => is_array( $upd ) && isset( $upd['error'] ) ? $upd : null,
+			'offer'     => $offer && version_compare( $offer, (string) $installed['v'], '>' ) ? $offer : '',
+		);
 	}
 
 	public static function admin_page() {
 		if ( ! current_user_can( 'manage_options' ) ) {
 			return;
 		}
-		$s    = self::settings();
-		$data = get_option( self::OPT_DATA, array() );
-		$next = wp_next_scheduled( self::CRON_HOOK );
-		$upd  = get_transient( self::UPD_CACHE );
+		// phpcs:ignore WordPress.Security.NonceVerification
+		$tab = isset( $_GET['tab'] ) ? sanitize_key( wp_unslash( $_GET['tab'] ) ) : 'panoramica';
+		$tab = isset( self::TABS[ $tab ] ) ? $tab : 'panoramica';
+		$s   = self::settings();
+		$opt = esc_attr( self::OPT_SETTINGS );
+		$post = esc_url( admin_url( 'admin-post.php' ) );
+		$fmt  = function ( $ts ) {
+			return $ts ? wp_date( 'd/m/Y H:i', (int) $ts ) : '—';
+		};
 		?>
-		<div class="wrap">
-			<h1>Aggiornamenti Vendor</h1>
+		<div class="wrap agv-admin">
+			<style>
+				.agv-admin{--agv-accent:var(--wp-admin-theme-color,#2271b1);max-width:1100px}
+				.agv-admin h1{display:flex;align-items:center;gap:.6rem;flex-wrap:wrap}
+				.agv-admin .agv-ver{font-size:12px;font-weight:500;padding:.15rem .55rem;border-radius:999px;background:#f0f0f1;color:#50575e}
+				.agv-admin .nav-tab-wrapper{margin:1rem 0 1.25rem}
+				.agv-admin .nav-tab .agv-n{display:inline-block;min-width:1.4em;margin-left:.35rem;padding:0 .4em;border-radius:999px;background:#dcdcde;font-size:11px;line-height:1.6;text-align:center}
+				.agv-admin .nav-tab .agv-n.agv-bad{background:#d63638;color:#fff}
+				.agv-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:1rem;margin-bottom:1.5rem}
+				.agv-box{background:#fff;border:1px solid #dcdcde;border-radius:8px;padding:1.1rem 1.25rem;box-shadow:0 1px 2px rgba(0,0,0,.04);display:flex;flex-direction:column;gap:.6rem}
+				.agv-box h2{margin:0;font-size:14px;color:#50575e;text-transform:uppercase;letter-spacing:.04em}
+				.agv-big{font-size:22px;font-weight:600;line-height:1.3;color:#1d2327;display:flex;align-items:center;gap:.5rem;flex-wrap:wrap}
+				.agv-box dl{display:grid;grid-template-columns:max-content 1fr;gap:.25rem .9rem;margin:0}
+				.agv-box dt{color:#646970}
+				.agv-box dd{margin:0}
+				.agv-acts{display:flex;flex-wrap:wrap;gap:.5rem;margin-top:auto;padding-top:.4rem}
+				.agv-acts form{margin:0}
+				.agv-pill{display:inline-flex;align-items:center;gap:.3rem;font-size:12px;font-weight:600;padding:.15rem .6rem;border-radius:999px;white-space:nowrap}
+				.agv-pill.ok{background:#e7f6ec;color:#0a6b2d}
+				.agv-pill.warn{background:#fcf0e1;color:#8a4b00}
+				.agv-pill.bad{background:#fcebec;color:#a1191f}
+				.agv-code{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap}
+				.agv-code code{font-size:14px;padding:.3rem .6rem;border-radius:4px}
+				.agv-panel{background:#fff;border:1px solid #dcdcde;border-radius:8px;padding:1.25rem;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+				.agv-panel > h2:first-child{margin-top:0}
+				.agv-panel textarea.code{white-space:pre;overflow-x:auto;font-size:13px;line-height:1.5}
+				.agv-panel details{margin:.75rem 0;color:#50575e}
+				.agv-panel summary{cursor:pointer;color:var(--agv-accent);font-weight:500}
+				.agv-panel .form-table th{width:220px}
+				.agv-bar{display:flex;flex-wrap:wrap;align-items:center;gap:.5rem;margin-top:1rem}
+				.agv-bar .agv-sp{flex:1}
+				.agv-tw{overflow-x:auto}
+				.agv-src{border-radius:8px;overflow:hidden}
+				.agv-src td,.agv-src th{vertical-align:middle;padding:.6rem .75rem}
+				.agv-src .agv-feed{display:block;font-size:11px;color:#646970;word-break:break-all;margin-top:.15rem}
+				.agv-src .agv-err{display:block;font-size:12px;color:#a1191f;margin-top:.25rem}
+				.agv-src .num{text-align:right;font-variant-numeric:tabular-nums}
+				@media (max-width:782px){.agv-src .agv-hide,.agv-src .agv-feed{display:none}.agv-panel .form-table th{width:auto}}
+			</style>
+
+			<h1>Aggiornamenti Vendor <?php $u = self::update_status(); ?><span class="agv-ver">versione <?php echo esc_html( $u['installed'] ); ?></span></h1>
+
 			<?php // phpcs:disable WordPress.Security.NonceVerification ?>
 			<?php if ( isset( $_GET['agv_done'] ) ) : ?>
 				<div class="notice notice-success is-dismissible"><p>Fonti aggiornate.</p></div>
@@ -1147,117 +1222,218 @@ TXT;
 				<div class="notice notice-success is-dismissible"><p>Filtri per argomento predefiniti ripristinati.</p></div>
 			<?php endif; ?>
 			<?php if ( isset( $_GET['agv_upd'] ) ) : ?>
-				<?php $wp_upd = get_site_transient( 'update_plugins' ); ?>
-				<?php if ( is_object( $wp_upd ) && ! empty( $wp_upd->response[ plugin_basename( __FILE__ ) ] ) ) : ?>
-					<div class="notice notice-warning is-dismissible"><p>Verifica completata: è disponibile la versione <?php echo esc_html( $wp_upd->response[ plugin_basename( __FILE__ ) ]->new_version ?? '' ); ?>. <a href="<?php echo esc_url( admin_url( 'plugins.php' ) ); ?>">Vai a Plugin per aggiornare</a>.</p></div>
-				<?php elseif ( is_array( $upd ) && isset( $upd['error'] ) ) : ?>
-					<div class="notice notice-error is-dismissible"><p>Verifica non riuscita: <?php echo esc_html( $upd['error'] ); ?></p></div>
+				<?php if ( $u['offer'] ) : ?>
+					<div class="notice notice-warning is-dismissible"><p>Verifica completata: è disponibile la versione <?php echo esc_html( $u['offer'] ); ?>.</p></div>
+				<?php elseif ( $u['error'] ) : ?>
+					<div class="notice notice-error is-dismissible"><p>Verifica non riuscita: <?php echo esc_html( $u['error']['error'] ); ?></p></div>
 				<?php else : ?>
 					<div class="notice notice-success is-dismissible"><p>Verifica completata: il plugin è aggiornato.</p></div>
 				<?php endif; ?>
 			<?php endif; ?>
 			<?php // phpcs:enable ?>
-			<p>Inserisci nella pagina lo shortcode <code>[aggiornamenti_vendor]</code>.</p>
 
-			<form method="post" action="options.php">
-				<?php settings_fields( 'agv' ); ?>
-				<table class="form-table" role="presentation">
-					<tr>
-						<th scope="row"><label for="agv-sources">Fonti</label></th>
-						<td>
-							<textarea id="agv-sources" name="<?php echo esc_attr( self::OPT_SETTINGS ); ?>[sources]" rows="22" class="large-text code" style="white-space:pre;overflow-x:auto"><?php echo esc_textarea( $s['sources'] ); ?></textarea>
-							<p class="description">
-								Una fonte per riga: <code>Etichetta | URL dati (https) | Pagina pubblica | tipo | modo | nota</code>.<br>
-								<strong>tipo</strong>: <code>rss</code>, <code>csaf</code> (URL della directory con changes.csv), <code>almalinux</code> (errata.full.json), <code>kev</code> (catalogo CISA).<br>
+			<?php
+			$data    = get_option( self::OPT_DATA, array() );
+			$srcs    = ! empty( $data['sources'] ) && is_array( $data['sources'] ) ? $data['sources'] : array();
+			$bad     = count( array_filter( $srcs, function ( $x ) {
+				return empty( $x['ok'] );
+			} ) );
+			$total   = array_sum( array_map( function ( $x ) {
+				return count( (array) $x['items'] );
+			}, $srcs ) );
+			$active  = count( self::parse_sources( $s['sources'] ) );
+			$ntopics = count( self::parse_topics( $s['topics'] ) );
+			$counts  = array( 'panoramica' => $bad, 'fonti' => $active, 'argomenti' => $ntopics );
+			?>
+			<nav class="nav-tab-wrapper" aria-label="Sezioni">
+				<?php foreach ( self::TABS as $k => $label ) : ?>
+					<a href="<?php echo esc_url( self::page_url( $k ) ); ?>" class="nav-tab<?php echo $k === $tab ? ' nav-tab-active' : ''; ?>"<?php echo $k === $tab ? ' aria-current="page"' : ''; ?>><?php echo esc_html( $label ); ?><?php
+					if ( 'panoramica' === $k ) {
+						if ( $bad ) {
+							echo '<span class="agv-n agv-bad" title="Fonti in errore">' . (int) $bad . '</span>';
+						}
+					} elseif ( isset( $counts[ $k ] ) ) {
+						echo '<span class="agv-n">' . (int) $counts[ $k ] . '</span>';
+					}
+					?></a>
+				<?php endforeach; ?>
+			</nav>
+
+			<?php if ( 'panoramica' === $tab ) : ?>
+				<?php $next = wp_next_scheduled( self::CRON_HOOK ); ?>
+				<div class="agv-cards">
+					<section class="agv-box" aria-labelledby="agv-h-feed">
+						<h2 id="agv-h-feed">Elenco avvisi</h2>
+						<div class="agv-big"><?php echo (int) $total; ?> avvisi
+							<?php if ( ! $srcs ) : ?>
+								<span class="agv-pill warn">Mai aggiornato</span>
+							<?php elseif ( $bad ) : ?>
+								<span class="agv-pill bad"><?php echo (int) $bad; ?> <?php echo 1 === $bad ? 'fonte' : 'fonti'; ?> in errore</span>
+							<?php else : ?>
+								<span class="agv-pill ok">✓ Tutte le fonti OK</span>
+							<?php endif; ?>
+						</div>
+						<dl>
+							<dt>Fonti attive</dt><dd><?php echo (int) $active; ?></dd>
+							<dt>Ultimo aggiornamento</dt><dd><?php echo esc_html( $fmt( $data['updated'] ?? 0 ) ); ?></dd>
+							<dt>Prossimo</dt><dd><?php echo $next ? esc_html( $fmt( $next ) ) : 'non pianificato'; ?></dd>
+						</dl>
+						<div class="agv-acts">
+							<form method="post" action="<?php echo $post; // phpcs:ignore WordPress.Security.EscapeOutput ?>">
+								<input type="hidden" name="action" value="agv_refresh_now">
+								<?php wp_nonce_field( 'agv_refresh_now' ); ?>
+								<?php submit_button( 'Aggiorna ora', 'secondary', 'submit', false ); ?>
+							</form>
+						</div>
+					</section>
+
+					<section class="agv-box" aria-labelledby="agv-h-upd">
+						<h2 id="agv-h-upd">Plugin</h2>
+						<div class="agv-big">Versione <?php echo esc_html( $u['installed'] ); ?>
+							<?php if ( $u['offer'] ) : ?>
+								<span class="agv-pill warn">Disponibile <?php echo esc_html( $u['offer'] ); ?></span>
+							<?php elseif ( $u['error'] ) : ?>
+								<span class="agv-pill bad">Verifica non riuscita</span>
+							<?php elseif ( $u['release'] ) : ?>
+								<span class="agv-pill ok">✓ Aggiornato</span>
+							<?php endif; ?>
+						</div>
+						<dl>
+							<dt>Ultima Release</dt>
+							<dd>
+								<?php if ( $u['release'] ) : ?>
+									<a href="<?php echo esc_url( $u['release']['url'] ); ?>"><?php echo esc_html( $u['release']['version'] ); ?></a>
+								<?php elseif ( $u['error'] ) : ?>
+									<?php echo esc_html( $u['error']['error'] ); ?>
+								<?php else : ?>
+									non verificata nell'ultima ora
+								<?php endif; ?>
+							</dd>
+							<dt>Verificata</dt><dd><?php echo esc_html( $fmt( $u['release']['checked'] ?? ( $u['error']['checked'] ?? 0 ) ) ); ?></dd>
+							<dt>Origine</dt><dd>GitHub Release, zip verificato con SHA-256</dd>
+						</dl>
+						<?php if ( current_user_can( 'update_plugins' ) ) : ?>
+							<div class="agv-acts">
+								<?php if ( $u['offer'] ) : ?>
+									<a class="button button-primary" href="<?php echo esc_url( wp_nonce_url( self_admin_url( 'update.php?action=upgrade-plugin&plugin=' . rawurlencode( $u['file'] ) ), 'upgrade-plugin_' . $u['file'] ) ); ?>">Aggiorna alla <?php echo esc_html( $u['offer'] ); ?></a>
+								<?php endif; ?>
+								<form method="post" action="<?php echo $post; // phpcs:ignore WordPress.Security.EscapeOutput ?>">
+									<input type="hidden" name="action" value="agv_check_update">
+									<?php wp_nonce_field( 'agv_check_update' ); ?>
+									<?php submit_button( 'Verifica ora', 'secondary', 'submit', false ); ?>
+								</form>
+							</div>
+						<?php endif; ?>
+					</section>
+
+					<section class="agv-box" aria-labelledby="agv-h-sc">
+						<h2 id="agv-h-sc">Pagina pubblica</h2>
+						<p style="margin:0">Inserisci lo shortcode nella pagina in cui mostrare l'elenco.</p>
+						<div class="agv-code">
+							<code id="agv-sc">[aggiornamenti_vendor]</code>
+							<button type="button" class="button button-small" id="agv-copy">Copia</button>
+						</div>
+						<p class="description" style="margin:0"><?php echo (int) $ntopics; ?> filtri per argomento configurati; nella pagina compaiono solo quelli con almeno un avviso.</p>
+					</section>
+				</div>
+
+				<div class="agv-panel">
+					<h2>Stato fonti</h2>
+					<?php if ( ! $srcs ) : ?>
+						<p>Nessun dato raccolto finora: premi <strong>Aggiorna ora</strong>.</p>
+					<?php else : ?>
+						<div class="agv-tw">
+							<table class="widefat striped agv-src">
+								<thead><tr><th scope="col">Fonte</th><th scope="col" class="agv-hide">Tipo / modo</th><th scope="col">Stato</th><th scope="col" class="num">Avvisi</th></tr></thead>
+								<tbody>
+								<?php foreach ( $srcs as $src ) : ?>
+									<tr>
+										<td><strong><?php echo esc_html( $src['label'] ); ?></strong><span class="agv-feed"><?php echo esc_html( $src['feed'] ); ?></span></td>
+										<td class="agv-hide"><?php echo esc_html( $src['type'] . ' / ' . $src['mode'] ); ?></td>
+										<td>
+											<?php if ( ! empty( $src['ok'] ) ) : ?>
+												<span class="agv-pill ok">OK</span>
+											<?php else : ?>
+												<span class="agv-pill bad">Errore</span><span class="agv-err"><?php echo esc_html( $src['error'] ); ?></span>
+											<?php endif; ?>
+										</td>
+										<td class="num"><?php echo (int) count( (array) $src['items'] ); ?></td>
+									</tr>
+								<?php endforeach; ?>
+								</tbody>
+							</table>
+						</div>
+					<?php endif; ?>
+				</div>
+				<script>
+					(function(){var b=document.getElementById('agv-copy');if(!b||!navigator.clipboard)return b&&(b.hidden=true);
+					b.addEventListener('click',function(){navigator.clipboard.writeText(document.getElementById('agv-sc').textContent).then(function(){b.textContent='Copiato ✓';setTimeout(function(){b.textContent='Copia';},2000);});});})();
+				</script>
+
+			<?php else : ?>
+				<div class="agv-panel">
+					<form method="post" action="options.php">
+						<?php settings_fields( 'agv' ); ?>
+
+						<?php if ( 'fonti' === $tab ) : ?>
+							<h2><label for="agv-sources">Fonti</label></h2>
+							<p>Una fonte per riga: <code>Etichetta | URL dati (https) | Pagina pubblica | tipo | modo | nota</code>. Le righe che iniziano con <code>#</code> sono disattivate.</p>
+							<details>
+								<summary>Tipi e modi di visualizzazione</summary>
+								<p><strong>tipo</strong>: <code>rss</code>, <code>csaf</code> (URL della directory con changes.csv), <code>almalinux</code> (errata.full.json), <code>kev</code> (catalogo CISA).<br>
 								<strong>modo</strong>: <code>completo</code> mostra titolo e breve descrizione del vendor; <code>titolo</code> solo il titolo; <code>id</code> solo identificativi (CVE, ID advisory) e link, senza testo del vendor.<br>
-								Le righe che iniziano con <code>#</code> sono ignorate. Prima di attivare una fonte o passare a <code>titolo</code> o <code>completo</code>, verifica i termini d'uso del vendor.
-							</p>
-						</td>
-					</tr>
-					<tr>
-						<th scope="row"><label for="agv-max">Elementi per fonte</label></th>
-						<td><input id="agv-max" type="number" min="1" max="100" name="<?php echo esc_attr( self::OPT_SETTINGS ); ?>[max_per_source]" value="<?php echo esc_attr( $s['max_per_source'] ); ?>"></td>
-					</tr>
-					<tr>
-						<th scope="row"><label for="agv-days">Finestra (giorni)</label></th>
-						<td><input id="agv-days" type="number" min="1" max="365" name="<?php echo esc_attr( self::OPT_SETTINGS ); ?>[max_days]" value="<?php echo esc_attr( $s['max_days'] ); ?>"></td>
-					</tr>
-					<tr>
-						<th scope="row"><label for="agv-int">Aggiornamento ogni (ore)</label></th>
-						<td><input id="agv-int" type="number" min="1" max="24" name="<?php echo esc_attr( self::OPT_SETTINGS ); ?>[interval_hours]" value="<?php echo esc_attr( $s['interval_hours'] ); ?>"></td>
-					</tr>
-					<tr>
-						<th scope="row"><label for="agv-topics">Filtri per argomento</label></th>
-						<td>
-							<textarea id="agv-topics" name="<?php echo esc_attr( self::OPT_SETTINGS ); ?>[topics]" rows="14" class="large-text code" style="white-space:pre;overflow-x:auto"><?php echo esc_textarea( $s['topics'] ); ?></textarea>
-							<p class="description">
-								Una riga per filtro: <code>Etichetta | parola chiave, parola chiave, …</code>. Il filtro raccoglie gli avvisi delle fonti attive che contengono una delle parole (parole intere, maiuscole/minuscole indifferenti) nel titolo o nella descrizione. Con <code>=</code> davanti la parola deve rispettare maiuscole/minuscole (es. <code>=iOS</code> non trova "Cisco IOS"); con <code>*</code> in fondo la parola può continuare (es. <code>dotnet*</code> trova "dotnet8.0"). Elencare i prodotti del vendor fa comparire l'avviso anche quando non cita il nome del vendor.<br>
-								Utile per i vendor con termini d'uso restrittivi (i loro feed non vengono mai letti) e per prodotti e tecnologie senza fonte propria. Compaiono solo i filtri con almeno un avviso. Righe con <code>#</code> ignorate. Il pulsante "Ripristina filtri per argomento predefiniti", sotto, carica l'elenco aggiornato.
-							</p>
-						</td>
-					</tr>
-					<tr>
-						<th scope="row"><label for="agv-disc">Disclaimer</label></th>
-						<td><textarea id="agv-disc" name="<?php echo esc_attr( self::OPT_SETTINGS ); ?>[disclaimer]" rows="3" class="large-text"><?php echo esc_textarea( $s['disclaimer'] ); ?></textarea></td>
-					</tr>
-				</table>
-				<?php submit_button(); ?>
-			</form>
+								Prima di attivare una fonte o passare a <code>titolo</code> o <code>completo</code>, verifica i termini d'uso del vendor.</p>
+							</details>
+							<textarea id="agv-sources" name="<?php echo $opt; // phpcs:ignore WordPress.Security.EscapeOutput ?>[sources]" rows="22" class="large-text code" spellcheck="false"><?php echo esc_textarea( $s['sources'] ); ?></textarea>
 
-			<h2>Stato fonti</h2>
-			<p>
-				Ultimo aggiornamento: <?php echo ! empty( $data['updated'] ) ? esc_html( wp_date( 'd/m/Y H:i', (int) $data['updated'] ) ) : '—'; ?>
-				· Prossimo: <?php echo $next ? esc_html( wp_date( 'd/m/Y H:i', $next ) ) : 'non pianificato'; ?>
-			</p>
-			<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="display:inline-block;margin-right:.5rem">
-				<input type="hidden" name="action" value="agv_refresh_now">
-				<?php wp_nonce_field( 'agv_refresh_now' ); ?>
-				<?php submit_button( 'Aggiorna ora', 'secondary', 'submit', false ); ?>
-			</form>
-			<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="display:inline-block" onsubmit="return confirm('Sostituire l\'elenco fonti con quello predefinito?');">
-				<input type="hidden" name="action" value="agv_reset_sources">
-				<?php wp_nonce_field( 'agv_reset_sources' ); ?>
-				<?php submit_button( 'Ripristina fonti predefinite', 'secondary', 'submit', false ); ?>
-			</form>
-			<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="display:inline-block;margin-left:.5rem" onsubmit="return confirm('Sostituire i filtri per argomento con quelli predefiniti?');">
-				<input type="hidden" name="action" value="agv_reset_topics">
-				<?php wp_nonce_field( 'agv_reset_topics' ); ?>
-				<?php submit_button( 'Ripristina filtri per argomento predefiniti', 'secondary', 'submit', false ); ?>
-			</form>
-			<?php if ( ! empty( $data['sources'] ) ) : ?>
-				<table class="widefat striped" style="margin-top:1rem">
-					<thead><tr><th>Fonte</th><th>Tipo / modo</th><th>Stato</th><th>Elementi</th><th>Errore</th></tr></thead>
-					<tbody>
-					<?php foreach ( $data['sources'] as $src ) : ?>
-						<tr>
-							<td><?php echo esc_html( $src['label'] ); ?><br><code style="font-size:11px"><?php echo esc_html( $src['feed'] ); ?></code></td>
-							<td><?php echo esc_html( $src['type'] . ' / ' . $src['mode'] ); ?></td>
-							<td><?php echo $src['ok'] ? '✅ OK' : '⚠️ Errore'; ?></td>
-							<td><?php echo (int) count( $src['items'] ); ?></td>
-							<td><?php echo esc_html( $src['error'] ); ?></td>
-						</tr>
-					<?php endforeach; ?>
-					</tbody>
-				</table>
-			<?php endif; ?>
+						<?php elseif ( 'argomenti' === $tab ) : ?>
+							<h2><label for="agv-topics">Filtri per argomento</label></h2>
+							<p>Una riga per filtro: <code>Etichetta | parola chiave, parola chiave, …</code>. Il filtro raccoglie gli avvisi che contengono una delle parole nel titolo o nella descrizione. Compaiono solo i filtri con almeno un avviso.</p>
+							<details>
+								<summary>Come scrivere le parole chiave</summary>
+								<p>Le parole sono intere e maiuscole/minuscole indifferenti. Con <code>=</code> davanti la parola deve rispettare maiuscole/minuscole (es. <code>=iOS</code> non trova "Cisco IOS"); con <code>*</code> in fondo la parola può continuare (es. <code>dotnet*</code> trova "dotnet8.0"). Elencare i prodotti del vendor fa comparire l'avviso anche quando non cita il nome del vendor.<br>
+								Utile per i vendor con termini d'uso restrittivi (i loro feed non vengono mai letti) e per prodotti e tecnologie senza fonte propria. Righe con <code>#</code> ignorate. "Ripristina predefiniti" carica l'elenco aggiornato del plugin.</p>
+							</details>
+							<textarea id="agv-topics" name="<?php echo $opt; // phpcs:ignore WordPress.Security.EscapeOutput ?>[topics]" rows="22" class="large-text code" spellcheck="false"><?php echo esc_textarea( $s['topics'] ); ?></textarea>
 
-			<h2>Aggiornamenti del plugin</h2>
-			<p>
-				Fonte: <code><?php echo esc_html( 'github.com/' . self::REPO ); ?></code> (GitHub Release, zip verificato con SHA-256).
-				<?php if ( is_array( $upd ) && isset( $upd['error'] ) ) : ?>
-					<br>⚠️ Ultima verifica <?php echo esc_html( wp_date( 'd/m/Y H:i', (int) $upd['checked'] ) ); ?>: <?php echo esc_html( $upd['error'] ); ?>
-				<?php elseif ( is_array( $upd ) ) : ?>
-					<br>Ultima Release: <a href="<?php echo esc_url( $upd['url'] ); ?>"><?php echo esc_html( $upd['version'] ); ?></a>, verificata il <?php echo esc_html( wp_date( 'd/m/Y H:i', (int) $upd['checked'] ) ); ?>.
-				<?php else : ?>
-					<br>Nessuna verifica nell'ultima ora.
-				<?php endif; ?>
-			</p>
-			<?php if ( current_user_can( 'update_plugins' ) ) : ?>
-				<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
-					<input type="hidden" name="action" value="agv_check_update">
-					<?php wp_nonce_field( 'agv_check_update' ); ?>
-					<?php submit_button( 'Verifica aggiornamenti ora', 'secondary', 'submit', false ); ?>
-				</form>
+						<?php else : ?>
+							<h2>Opzioni</h2>
+							<table class="form-table" role="presentation">
+								<tr>
+									<th scope="row"><label for="agv-max">Avvisi per fonte</label></th>
+									<td><input id="agv-max" type="number" min="1" max="100" class="small-text" name="<?php echo $opt; // phpcs:ignore WordPress.Security.EscapeOutput ?>[max_per_source]" value="<?php echo esc_attr( $s['max_per_source'] ); ?>"><p class="description">Massimo di avvisi raccolti da ciascuna fonte (1–100).</p></td>
+								</tr>
+								<tr>
+									<th scope="row"><label for="agv-days">Finestra (giorni)</label></th>
+									<td><input id="agv-days" type="number" min="1" max="365" class="small-text" name="<?php echo $opt; // phpcs:ignore WordPress.Security.EscapeOutput ?>[max_days]" value="<?php echo esc_attr( $s['max_days'] ); ?>"><p class="description">Gli avvisi più vecchi non vengono mostrati.</p></td>
+								</tr>
+								<tr>
+									<th scope="row"><label for="agv-int">Aggiornamento ogni (ore)</label></th>
+									<td><input id="agv-int" type="number" min="1" max="24" class="small-text" name="<?php echo $opt; // phpcs:ignore WordPress.Security.EscapeOutput ?>[interval_hours]" value="<?php echo esc_attr( $s['interval_hours'] ); ?>"></td>
+								</tr>
+								<tr>
+									<th scope="row"><label for="agv-disc">Disclaimer</label></th>
+									<td><textarea id="agv-disc" name="<?php echo $opt; // phpcs:ignore WordPress.Security.EscapeOutput ?>[disclaimer]" rows="4" class="large-text"><?php echo esc_textarea( $s['disclaimer'] ); ?></textarea><p class="description">Mostrato in fondo all'elenco nella pagina pubblica.</p></td>
+								</tr>
+							</table>
+						<?php endif; ?>
+
+						<div class="agv-bar">
+							<?php submit_button( 'Salva modifiche', 'primary', 'submit', false ); ?>
+							<span class="agv-sp"></span>
+							<?php if ( 'fonti' === $tab || 'argomenti' === $tab ) : ?>
+								<?php submit_button( 'fonti' === $tab ? 'Ripristina fonti predefinite' : 'Ripristina predefiniti', 'secondary', 'agv-reset', false, array( 'form' => 'agv-reset-form' ) ); ?>
+							<?php endif; ?>
+						</div>
+					</form>
+					<?php if ( 'fonti' === $tab || 'argomenti' === $tab ) : ?>
+						<?php $what = 'fonti' === $tab ? 'sources' : 'topics'; ?>
+						<form id="agv-reset-form" method="post" action="<?php echo $post; // phpcs:ignore WordPress.Security.EscapeOutput ?>" onsubmit="return confirm('<?php echo 'fonti' === $tab ? 'Sostituire l\\\'elenco fonti con quello predefinito?' : 'Sostituire i filtri per argomento con quelli predefiniti?'; ?>');">
+							<input type="hidden" name="action" value="agv_reset_<?php echo esc_attr( $what ); ?>">
+							<?php wp_nonce_field( 'agv_reset_' . $what ); ?>
+						</form>
+					<?php endif; ?>
+				</div>
 			<?php endif; ?>
 		</div>
 		<?php
