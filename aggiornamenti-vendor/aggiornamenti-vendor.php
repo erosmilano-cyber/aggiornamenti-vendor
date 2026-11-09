@@ -2,7 +2,7 @@
 /**
  * Plugin Name:       Aggiornamenti Vendor
  * Description:       Aggrega lato server advisory e aggiornamenti dei vendor (feed RSS, CSAF, errata AlmaLinux, CISA KEV) e li mostra con lo shortcode [aggiornamenti_vendor].
- * Version:           2.1.2
+ * Version:           2.2.0
  * Requires at least: 6.0
  * Requires PHP:      7.4
  * Update URI:        https://github.com/erosmilano-cyber/aggiornamenti-vendor
@@ -465,6 +465,9 @@ TXT;
 		return $ids ? 'Advisory ' . implode( ', ', $ids ) : 'Nuovo advisory ' . $src['label'];
 	}
 
+	/** Colori delle fonti: ben distinti tra loro e leggibili su sfondo chiaro e scuro. */
+	const PALETTE = array( '#2563eb', '#16a34a', '#d97706', '#9333ea', '#0891b2', '#db2777', '#4f46e5', '#65a30d', '#ea580c', '#0d9488', '#7c3aed', '#64748b', '#b45309', '#e11d48' );
+
 	public static function shortcode( $atts ) {
 		$atts = shortcode_atts( array( 'limite' => 200 ), $atts, 'aggiornamenti_vendor' );
 		$data = get_option( self::OPT_DATA, array() );
@@ -495,54 +498,130 @@ TXT;
 		$fmt_date = get_option( 'date_format' );
 		$fmt_full = $fmt_date . ' ' . get_option( 'time_format' );
 		$uid      = 'agv-' . wp_unique_id();
+		$now      = time();
+		$today    = wp_date( 'Y-m-d', $now );
+		$yday     = wp_date( 'Y-m-d', $now - DAY_IN_SECONDS );
+
+		// Conteggio per fonte (solo fonti con avvisi nel periodo) e raggruppamento per giorno.
+		$counts = array();
+		$groups = array();
+		foreach ( $items as $it ) {
+			$counts[ $it['vendor'] ] = ( $counts[ $it['vendor'] ] ?? 0 ) + 1;
+			$key = $it['ts'] ? wp_date( 'Y-m-d', $it['ts'] ) : '';
+			if ( ! isset( $groups[ $key ] ) ) {
+				if ( '' === $key ) {
+					$label = 'Data non disponibile';
+					$sub   = '';
+				} elseif ( $today === $key ) {
+					$label = 'Oggi';
+					$sub   = wp_date( 'j F Y', $it['ts'] );
+				} elseif ( $yday === $key ) {
+					$label = 'Ieri';
+					$sub   = wp_date( 'j F Y', $it['ts'] );
+				} else {
+					$label = wp_date( 'l j F', $it['ts'] );
+					$sub   = wp_date( 'Y', $it['ts'] );
+				}
+				$groups[ $key ] = array( 'label' => $label, 'sub' => $sub, 'items' => array() );
+			}
+			$groups[ $key ]['items'][] = $it;
+		}
+		$total = count( $items );
+		// Colore per fonte nell'ordine dell'elenco fonti: stabile finché l'elenco non cambia.
+		$color = array();
+		foreach ( array_keys( $labels ) as $i => $l ) {
+			$color[ $l ] = self::PALETTE[ $i % count( self::PALETTE ) ];
+		}
 
 		ob_start();
 		?>
 		<div class="agv" id="<?php echo esc_attr( $uid ); ?>">
 			<style>
-				.agv{--agv-b:#d0d7de;--agv-m:#57606a;--agv-a:#0b5cad;font-size:.95rem}
-				.agv-meta{color:var(--agv-m);font-size:.85rem;margin:0 0 1rem}
-				.agv-filters{display:flex;flex-wrap:wrap;gap:.4rem;margin:0 0 1rem}
-				.agv-filters button{border:1px solid var(--agv-b);background:transparent;border-radius:999px;padding:.25rem .8rem;cursor:pointer;font:inherit;font-size:.85rem;color:inherit}
-				.agv-filters button[aria-pressed="true"]{background:var(--agv-a);border-color:var(--agv-a);color:#fff}
-				.agv-list{list-style:none;margin:0;padding:0}
-				.agv-list li{display:grid;grid-template-columns:7.5rem 10rem 1fr;gap:.75rem;padding:.55rem 0;border-bottom:1px solid var(--agv-b);align-items:baseline}
+				.agv{--agv-acc:#2563eb;--agv-line:color-mix(in srgb,currentColor 13%,transparent);--agv-soft:color-mix(in srgb,currentColor 4%,transparent);--agv-muted:color-mix(in srgb,currentColor 64%,transparent);font-size:.95rem;line-height:1.5}
+				.agv *{box-sizing:border-box}
+				.agv-meta{display:flex;flex-wrap:wrap;align-items:center;gap:.35rem .6rem;margin:0 0 1rem;color:var(--agv-muted);font-size:.85rem}
+				.agv-live{width:.5rem;height:.5rem;border-radius:50%;background:#16a34a;box-shadow:0 0 0 3px color-mix(in srgb,#16a34a 22%,transparent)}
+				.agv-filters{display:flex;flex-wrap:wrap;gap:.5rem;margin:0 0 1.25rem}
+				.agv-filters button{display:inline-flex;align-items:center;gap:.45rem;margin:0;border:1px solid var(--agv-line);background:var(--agv-soft);color:inherit;border-radius:999px;padding:.4rem .85rem;font:inherit;font-size:.85rem;line-height:1.2;cursor:pointer;transition:background-color .15s,border-color .15s,color .15s}
+				.agv-filters button:hover{border-color:color-mix(in srgb,currentColor 40%,transparent)}
+				.agv-filters button[aria-pressed="true"]{background:var(--agv-acc);border-color:var(--agv-acc);color:#fff}
+				.agv-filters button[aria-pressed="true"] .agv-dot{background:#fff}
+				.agv-filters button:focus-visible,.agv-card:focus-visible{outline:2px solid var(--agv-acc);outline-offset:2px}
+				.agv-dot{flex:none;width:.55rem;height:.55rem;border-radius:50%;background:var(--agv-c,#2563eb)}
+				.agv-n{min-width:1.4em;padding:0 .35em;border-radius:999px;background:color-mix(in srgb,currentColor 12%,transparent);font-size:.75rem;font-variant-numeric:tabular-nums;text-align:center}
+				.agv-day{display:flex;flex-wrap:wrap;align-items:baseline;gap:.5rem;margin:1.5rem 0 .6rem;padding:0;font-size:.78rem;font-weight:700;letter-spacing:.06em;line-height:1.3;text-transform:uppercase;color:var(--agv-muted)}
+				.agv-day span{font-weight:400;letter-spacing:0;text-transform:none}
+				.agv-group:first-child .agv-day{margin-top:.25rem}
+				.agv-list ul{list-style:none;margin:0;padding:0;display:grid;gap:.55rem}
+				.agv-list li{margin:0;padding:0}
 				.agv-list li[hidden]{display:none}
-				.agv-date{color:var(--agv-m);font-variant-numeric:tabular-nums;font-size:.85rem}
-				.agv-vendor{font-size:.8rem;font-weight:600;border:1px solid var(--agv-b);border-radius:4px;padding:.05rem .4rem;justify-self:start}
-				.agv-list a{word-break:break-word}
-				.agv-sources{margin-top:1.5rem;font-size:.85rem;color:var(--agv-m)}
-				.agv-sources ul{margin:.4rem 0 0;padding-left:1.1rem}
-				.agv-warn{color:#9a6700}
-				.agv-disclaimer{margin-top:1rem;font-size:.85rem;color:var(--agv-m);font-style:italic}
-				@media (max-width:640px){.agv-list li{grid-template-columns:1fr;gap:.2rem}}
+				.agv-group[hidden]{display:none}
+				.agv-card{position:relative;display:block;padding:.8rem 2.6rem .8rem 1rem;border:1px solid var(--agv-line);border-left:4px solid var(--agv-c,#2563eb);border-radius:.65rem;background:var(--agv-soft);color:inherit;text-decoration:none;transition:transform .15s,box-shadow .15s,border-color .15s}
+				.agv-card:hover{transform:translateY(-1px);border-color:color-mix(in srgb,currentColor 25%,transparent);border-left-color:var(--agv-c,#2563eb);box-shadow:0 8px 20px -12px color-mix(in srgb,currentColor 45%,transparent)}
+				.agv-top{display:flex;flex-wrap:wrap;align-items:center;gap:.4rem;margin:0 0 .3rem}
+				.agv-vendor{display:inline-flex;align-items:center;gap:.35rem;font-size:.75rem;font-weight:700;letter-spacing:.02em;color:var(--agv-muted)}
+				.agv-new{padding:.05rem .45rem;border-radius:999px;background:#dc2626;color:#fff;font-size:.66rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase}
+				.agv-title{display:block;font-weight:600;line-height:1.4;overflow-wrap:anywhere}
+				.agv-card:hover .agv-title{text-decoration:underline;text-underline-offset:.15em}
+				.agv-arrow{position:absolute;top:50%;right:1rem;transform:translateY(-50%);opacity:.35;transition:opacity .15s,transform .15s}
+				.agv-card:hover .agv-arrow{opacity:.9;transform:translate(2px,-50%)}
+				.agv-sr{position:absolute;width:1px;height:1px;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+				.agv-sources{margin-top:2rem;padding-top:1rem;border-top:1px solid var(--agv-line);font-size:.82rem;color:var(--agv-muted)}
+				.agv-sources-title{margin:0 0 .5rem;font-size:.78rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase}
+				.agv-sources ul{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(16rem,1fr));gap:.4rem 1.5rem}
+				.agv-sources li{margin:0}
+				.agv-sources a{color:inherit;font-weight:600}
+				.agv-warn{color:#b45309}
+				.agv-disclaimer{margin:1rem 0 0;padding:.75rem 1rem;border-radius:.65rem;background:var(--agv-soft);font-size:.8rem;color:var(--agv-muted)}
+				@media (max-width:640px){.agv-filters{flex-wrap:nowrap;overflow-x:auto;padding-bottom:.25rem;scrollbar-width:thin}.agv-filters button{flex:none}.agv-card{padding-right:2.2rem}.agv-arrow{right:.8rem}}
+				@media (prefers-reduced-motion:reduce){.agv *{transition:none!important}.agv-card:hover{transform:none}}
 			</style>
 
-			<p class="agv-meta">Ultimo aggiornamento: <?php echo esc_html( wp_date( $fmt_full, (int) $data['updated'] ) ); ?></p>
-
-			<div class="agv-filters" role="group" aria-label="Filtra per fonte">
-				<button type="button" data-v="" aria-pressed="true">Tutti</button>
-				<?php foreach ( array_keys( $labels ) as $l ) : ?>
-					<button type="button" data-v="<?php echo esc_attr( $l ); ?>" aria-pressed="false"><?php echo esc_html( $l ); ?></button>
-				<?php endforeach; ?>
-			</div>
+			<p class="agv-meta">
+				<span class="agv-live" aria-hidden="true"></span>
+				<span>Aggiornato il <?php echo esc_html( wp_date( $fmt_full, (int) $data['updated'] ) ); ?></span>
+				<span aria-hidden="true">·</span>
+				<span class="agv-count" aria-live="polite"><?php echo esc_html( sprintf( '%d %s', $total, 1 === $total ? 'avviso' : 'avvisi' ) ); ?></span>
+			</p>
 
 			<?php if ( empty( $items ) ) : ?>
 				<p class="agv-empty">Nessun aggiornamento nel periodo considerato.</p>
 			<?php else : ?>
-				<ul class="agv-list">
-					<?php foreach ( $items as $it ) : ?>
-						<li data-v="<?php echo esc_attr( $it['vendor'] ); ?>">
-							<span class="agv-date"><?php echo $it['ts'] ? esc_html( wp_date( $fmt_date, $it['ts'] ) ) : '—'; ?></span>
-							<span class="agv-vendor"><?php echo esc_html( $it['vendor'] ); ?></span>
-							<a href="<?php echo esc_url( $it['link'] ); ?>" target="_blank" rel="noopener noreferrer nofollow"><?php echo esc_html( $it['text'] ); ?></a>
-						</li>
+				<div class="agv-filters" role="group" aria-label="Filtra per fonte">
+					<button type="button" data-v="" aria-pressed="true">Tutti <span class="agv-n"><?php echo (int) $total; ?></span></button>
+					<?php foreach ( $counts as $l => $n ) : ?>
+						<button type="button" data-v="<?php echo esc_attr( $l ); ?>" aria-pressed="false" style="--agv-c:<?php echo esc_attr( $color[ $l ] ); ?>"><span class="agv-dot" aria-hidden="true"></span><?php echo esc_html( $l ); ?> <span class="agv-n"><?php echo (int) $n; ?></span></button>
 					<?php endforeach; ?>
-				</ul>
+				</div>
+
+				<div class="agv-list">
+					<?php foreach ( $groups as $g ) : ?>
+						<section class="agv-group">
+							<h3 class="agv-day"><?php echo esc_html( $g['label'] ); ?><?php if ( '' !== $g['sub'] ) : ?> <span><?php echo esc_html( $g['sub'] ); ?></span><?php endif; ?></h3>
+							<ul>
+								<?php foreach ( $g['items'] as $it ) : ?>
+									<li data-v="<?php echo esc_attr( $it['vendor'] ); ?>" style="--agv-c:<?php echo esc_attr( $color[ $it['vendor'] ] ); ?>">
+										<a class="agv-card" href="<?php echo esc_url( $it['link'] ); ?>" target="_blank" rel="noopener noreferrer nofollow">
+											<span class="agv-top">
+												<span class="agv-vendor"><span class="agv-dot" aria-hidden="true"></span><?php echo esc_html( $it['vendor'] ); ?></span>
+												<?php if ( $it['ts'] > $now - DAY_IN_SECONDS ) : ?>
+													<span class="agv-new">Nuovo</span>
+												<?php endif; ?>
+											</span>
+											<span class="agv-title"><?php echo esc_html( $it['text'] ); ?></span>
+											<span class="agv-arrow" aria-hidden="true">↗</span>
+											<span class="agv-sr">(si apre in una nuova scheda)</span>
+										</a>
+									</li>
+								<?php endforeach; ?>
+							</ul>
+						</section>
+					<?php endforeach; ?>
+				</div>
 			<?php endif; ?>
 
 			<div class="agv-sources">
-				<strong>Fonti</strong>
+				<h3 class="agv-sources-title">Fonti e attribuzioni</h3>
 				<ul>
 					<?php foreach ( $data['sources'] as $src ) : ?>
 						<li>
@@ -570,11 +649,13 @@ TXT;
 			(function(){
 				var root=document.getElementById(<?php echo wp_json_encode( $uid ); ?>);
 				if(!root)return;
-				var btns=root.querySelectorAll('.agv-filters button'),rows=root.querySelectorAll('.agv-list li');
+				var btns=root.querySelectorAll('.agv-filters button'),rows=root.querySelectorAll('.agv-list li'),groups=root.querySelectorAll('.agv-group'),count=root.querySelector('.agv-count');
 				btns.forEach(function(b){b.addEventListener('click',function(){
-					var v=b.getAttribute('data-v');
+					var v=b.getAttribute('data-v'),n=0;
 					btns.forEach(function(x){x.setAttribute('aria-pressed',x===b?'true':'false');});
-					rows.forEach(function(r){r.hidden=!!v&&r.getAttribute('data-v')!==v;});
+					rows.forEach(function(r){r.hidden=!!v&&r.getAttribute('data-v')!==v;if(!r.hidden)n++;});
+					groups.forEach(function(g){g.hidden=!g.querySelector('li:not([hidden])');});
+					if(count)count.textContent=n+(n===1?' avviso':' avvisi')+(v?' · '+v:'');
 				});});
 			})();
 			</script>
