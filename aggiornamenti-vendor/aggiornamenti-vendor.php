@@ -2,7 +2,7 @@
 /**
  * Plugin Name:       Aggiornamenti Vendor
  * Description:       Aggrega lato server advisory e aggiornamenti dei vendor (feed RSS, CSAF, errata AlmaLinux, CISA KEV) e li mostra con lo shortcode [aggiornamenti_vendor].
- * Version:           2.1.1
+ * Version:           2.1.2
  * Requires at least: 6.0
  * Requires PHP:      7.4
  * Update URI:        https://github.com/erosmilano-cyber/aggiornamenti-vendor
@@ -91,6 +91,7 @@ TXT;
 		add_action( 'admin_init', array( __CLASS__, 'maybe_upgrade' ) );
 		add_action( 'admin_post_agv_refresh_now', array( __CLASS__, 'handle_refresh_now' ) );
 		add_action( 'admin_post_agv_reset_sources', array( __CLASS__, 'handle_reset_sources' ) );
+		add_action( 'admin_post_agv_check_update', array( __CLASS__, 'handle_check_update' ) );
 		add_action( 'update_option_' . self::OPT_SETTINGS, array( __CLASS__, 'reschedule' ), 10, 0 );
 		// Aggiornamenti del plugin dalle GitHub Release (host dell'header "Update URI").
 		add_filter( 'update_plugins_github.com', array( __CLASS__, 'update_check' ), 10, 3 );
@@ -587,7 +588,8 @@ TXT;
 	/**
 	 * Ultima GitHub Release del repository di distribuzione REPO (pubblico, nessun token).
 	 * Ritorna array( version, package, checksum, notes, url, checked ) o WP_Error.
-	 * Cache 6 ore, errori 1 ora. Gira solo in WP-Cron o nell'area admin.
+	 * Cache 1 ora (errori 15 minuti): la frequenza dei controlli la decide già WordPress.
+	 * Gira solo in WP-Cron o nell'area admin.
 	 */
 	public static function latest_release( $force = false ) {
 		$c = $force ? false : get_transient( self::UPD_CACHE );
@@ -596,9 +598,9 @@ TXT;
 		}
 		$info = self::fetch_release();
 		if ( is_wp_error( $info ) ) {
-			set_transient( self::UPD_CACHE, array( 'error' => $info->get_error_message(), 'checked' => time() ), HOUR_IN_SECONDS );
+			set_transient( self::UPD_CACHE, array( 'error' => $info->get_error_message(), 'checked' => time() ), 15 * MINUTE_IN_SECONDS );
 		} else {
-			set_transient( self::UPD_CACHE, $info, 6 * HOUR_IN_SECONDS );
+			set_transient( self::UPD_CACHE, $info, HOUR_IN_SECONDS );
 		}
 		return $info;
 	}
@@ -639,8 +641,7 @@ TXT;
 		if ( plugin_basename( __FILE__ ) !== $plugin_file ) {
 			return $update;
 		}
-		// "Controlla di nuovo" in Bacheca → Aggiornamenti salta la cache.
-		$r = self::latest_release( ! empty( $_GET['force-check'] ) ); // phpcs:ignore WordPress.Security.NonceVerification
+		$r = self::latest_release( self::is_manual_check() );
 		if ( is_wp_error( $r ) ) {
 			return $update;
 		}
@@ -653,6 +654,31 @@ TXT;
 			'requires'     => '6.0',
 			'requires_php' => '7.4',
 		);
+	}
+
+	/**
+	 * Verifica richiesta da una persona: pagina Bacheca → Aggiornamenti (dove WordPress
+	 * ricontrolla al massimo una volta al minuto) o link "Verifica di nuovo".
+	 */
+	private static function is_manual_check() {
+		// phpcs:ignore WordPress.Security.NonceVerification
+		return ! empty( $_GET['force-check'] ) || ( isset( $GLOBALS['pagenow'] ) && 'update-core.php' === $GLOBALS['pagenow'] );
+	}
+
+	/** Pulsante "Verifica aggiornamenti ora": interroga GitHub e ricalcola gli aggiornamenti dei plugin. */
+	public static function handle_check_update() {
+		if ( ! current_user_can( 'update_plugins' ) ) {
+			wp_die( 'Permesso negato.' );
+		}
+		check_admin_referer( 'agv_check_update' );
+		self::latest_release( true );
+		delete_site_transient( 'update_plugins' );
+		if ( ! function_exists( 'wp_update_plugins' ) ) {
+			require_once ABSPATH . WPINC . '/update.php';
+		}
+		wp_update_plugins();
+		wp_safe_redirect( admin_url( 'options-general.php?page=agv&agv_upd=1' ) );
+		exit;
 	}
 
 	/** Scarica lo zip della Release e lo accetta solo se lo SHA-256 coincide con il file .sha256 pubblicato. */
@@ -767,6 +793,16 @@ TXT;
 			<?php if ( isset( $_GET['agv_reset'] ) ) : ?>
 				<div class="notice notice-success is-dismissible"><p>Fonti predefinite ripristinate.</p></div>
 			<?php endif; ?>
+			<?php if ( isset( $_GET['agv_upd'] ) ) : ?>
+				<?php $wp_upd = get_site_transient( 'update_plugins' ); ?>
+				<?php if ( is_object( $wp_upd ) && ! empty( $wp_upd->response[ plugin_basename( __FILE__ ) ] ) ) : ?>
+					<div class="notice notice-warning is-dismissible"><p>Verifica completata: è disponibile la versione <?php echo esc_html( $wp_upd->response[ plugin_basename( __FILE__ ) ]->new_version ?? '' ); ?>. <a href="<?php echo esc_url( admin_url( 'plugins.php' ) ); ?>">Vai a Plugin per aggiornare</a>.</p></div>
+				<?php elseif ( is_array( $upd ) && isset( $upd['error'] ) ) : ?>
+					<div class="notice notice-error is-dismissible"><p>Verifica non riuscita: <?php echo esc_html( $upd['error'] ); ?></p></div>
+				<?php else : ?>
+					<div class="notice notice-success is-dismissible"><p>Verifica completata: il plugin è aggiornato.</p></div>
+				<?php endif; ?>
+			<?php endif; ?>
 			<?php // phpcs:enable ?>
 			<p>Inserisci nella pagina lo shortcode <code>[aggiornamenti_vendor]</code>.</p>
 
@@ -845,9 +881,16 @@ TXT;
 				<?php elseif ( is_array( $upd ) ) : ?>
 					<br>Ultima Release: <a href="<?php echo esc_url( $upd['url'] ); ?>"><?php echo esc_html( $upd['version'] ); ?></a>, verificata il <?php echo esc_html( wp_date( 'd/m/Y H:i', (int) $upd['checked'] ) ); ?>.
 				<?php else : ?>
-					<br>Nessuna verifica recente: usa <a href="<?php echo esc_url( admin_url( 'update-core.php?force-check=1' ) ); ?>">Bacheca → Aggiornamenti → Controlla di nuovo</a>.
+					<br>Nessuna verifica nell'ultima ora.
 				<?php endif; ?>
 			</p>
+			<?php if ( current_user_can( 'update_plugins' ) ) : ?>
+				<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
+					<input type="hidden" name="action" value="agv_check_update">
+					<?php wp_nonce_field( 'agv_check_update' ); ?>
+					<?php submit_button( 'Verifica aggiornamenti ora', 'secondary', 'submit', false ); ?>
+				</form>
+			<?php endif; ?>
 		</div>
 		<?php
 	}
